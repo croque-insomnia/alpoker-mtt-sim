@@ -1,0 +1,11 @@
+{
+  "name": "alpoker-mtt-sim",
+  "private": true,
+  "description": "5-Max MTT vs CPU（身内用のポーカー疑似トーナメント）",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
