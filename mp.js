@@ -1,13 +1,20 @@
 // mp.js — みんなで遊ぶ（ホスト型マルチプレイ）。net.js と game.js の後に読み込む。
 // ホストのブラウザが全卓の進行を持ち、各人には「自分の視点の画面データ（view）」だけを送る。
 // 全卓が同じタイミングで1ハンドずつ進む（ラウンド制）。人間のいない卓は即座に進む。
-const ACT_MS = 25000, // 1回の持ち時間。切れたらチェック（できなければフォールド）
+const ACT_MS = 25000, // 1回の持ち時間。切れたらチェック（できなければフォールド）して離席扱いにする
   ASK_MS = 20000, // リエントリーを選ぶ時間
   MP = { watch: {}, me: "", roster: [], open: 0 };
 const mpEsc = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const mpAuto = (c) => (c.toCall ? { t: "f" } : { t: "c" });
 const mpTable = (p) => G.tables.find((t) => t.p.includes(p));
+// 席に着いていて、操作を待つ必要がある人間（離席中の人は自動で進める）
+const mpHere = (p) => p.hero && p.alive && !p.away;
+// 1ハンドを待ちなしで最後まで進める。人間の番は自動でチェック/フォールド
+function mpRun(t) {
+  const g = hand(t);
+  for (let r = g.next(); !r.done; ) r = g.next(r.value.k == "hero" ? mpAuto(r.value.c) : undefined);
+}
 const mpSend = (m) => (Net.isHost() ? mpOnMsg(MP.me, m) : Net.send(m));
 
 // ================= ホスト側：進行 =================
@@ -56,10 +63,9 @@ function mpRound() {
     t.gone = [];
     t.lg = [];
     t.req = null;
-    if (t.p.some((p) => p.hero && p.alive)) live.push(t);
+    if (t.p.some(mpHere)) live.push(t);
     else {
-      const g = hand(t); // 人間のいない卓は即座に1ハンド進める
-      while (!g.next().done);
+      mpRun(t); // 操作する人間のいない卓は即座に1ハンド進める
       bust(t);
     }
   });
@@ -83,12 +89,15 @@ function mpStep(t, v) {
       }
       t.req = y;
       t.rt = Date.now() + ACT_MS;
-      t.to = setTimeout(() => mpStep(t, mpAuto(y.c)), ACT_MS);
+      t.to = setTimeout(() => {
+        y.p.away = 1; // 時間切れの人は、本人が「戻る」を押すまで自動で進める
+        mpStep(t, mpAuto(y.c));
+      }, ACT_MS);
       return mpPush();
     }
     if (y.k == "tick") {
       mpPush();
-      const inHand = t.ps.some((p) => p.hero && !p.fold && !p.allin);
+      const inHand = t.ps.some((p) => p.hero && !p.away && !p.fold && !p.allin);
       t.to = setTimeout(() => mpStep(t), inHand ? 480 : 140);
       return;
     }
@@ -159,6 +168,7 @@ function mpOnMsg(from, m) {
   if (!m || !G.mp) return;
   if (m.t == "act") mpAct(from, m.a);
   else if (m.t == "re") mpRe(from, !!m.y);
+  else if (m.t == "back") mpBack(from);
   else if (m.t == "watch") {
     MP.watch[from] = m.i | 0;
     mpPush();
@@ -168,9 +178,28 @@ function mpLeft(id) {
   const p = G.mp && G.P.find((p) => p.pid == id);
   if (!p) return;
   p.away = 1; // 切断した人は自動でチェック/フォールド
-  if (p.ask) mpRe(id, 0);
+  // リエントリーの確認中なら、締め切りまで待つ（その間に戻ってくれば選べる）
   const t = G.tables.find((t) => t.req && t.req.p == p);
   if (t) mpStep(t, mpAuto(t.req.c));
+}
+
+// 離席から戻る
+function mpBack(pid) {
+  const p = G.P.find((p) => p.pid == pid);
+  if (!p || !p.away) return;
+  p.away = 0;
+  mpPush();
+}
+// 合言葉で入り直した人：席の持ち主を新しい接続に付け替えて、離席を解く
+function mpRejoin(old, id) {
+  if (MP.watch[old] != null) MP.watch[id] = MP.watch[old];
+  delete MP.watch[old];
+  if (!G.mp) return;
+  const p = G.P.find((p) => p.pid == old);
+  if (p) {
+    p.pid = id;
+    p.away = 0;
+  }
 }
 
 // ================= ホスト側：各人への画面データ =================
@@ -212,6 +241,7 @@ function mpView(pid) {
         }
       : null,
     ask: me && me.ask ? 1 : 0,
+    away: play && me.away ? 1 : 0,
     place: me && !me.alive ? me.place || 0 : 0,
     over: G.over ? 1 : 0, ti, tn: G.tables.length, spec: play ? 0 : 1, wait: G.wait ? 1 : 0,
   };
@@ -222,8 +252,38 @@ function mpPush() {
 }
 
 // ================= 画面（ホストも参加者も同じ描画） =================
+// ホストから届いた画面データを、そのまま HTML に入れても安全な形に直す
+// 数値は数値に、札は 0〜51 の整数に、文字はエスケープ済みに。ログは札の表示（cd の出力）だけを許す
+const mpN = (x) => (Number.isFinite(+x) ? +x : 0),
+  mpCards = (a) => (Array.isArray(a) ? a.map((c) => c | 0).filter((c) => c >= 0 && c < 52) : null),
+  mpLog = (s) =>
+    mpEsc(s).replace(
+      /&lt;i class=&quot;c s([0-3])&quot;&gt;([2-9TJQKA][♠♥♦♣])&lt;\/i&gt;/g,
+      '<i class="c s$1">$2</i>',
+    );
+function mpClean(v) {
+  const o = {};
+  for (const k of ["lv", "bb", "an", "rem", "al", "en", "itm", "avg", "rk", "st", "re", "pot", "ask", "away", "place", "over", "ti", "tn", "spec", "wait"])
+    o[k] = mpN(v[k]);
+  o.lv = Math.min(Math.max(0, o.lv | 0), LV.length - 1);
+  o.bb = o.bb || 1;
+  o.tn = Math.max(1, o.tn | 0);
+  o.ti = Math.min(Math.max(0, o.ti | 0), o.tn - 1);
+  o.bd = mpCards(v.bd) || [];
+  o.lg = (Array.isArray(v.lg) ? v.lg : []).slice(-14).map(mpLog);
+  o.pl = (Array.isArray(v.pl) ? v.pl : []).map((p) => ({
+    name: mpEsc(p.name), ty: mpEsc(p.ty == null ? "" : p.ty), lab: mpEsc(p.lab || ""),
+    col: /^#[0-9a-f]{3,8}$/i.test(p.col) ? p.col : "",
+    stack: mpN(p.stack), bet: mpN(p.bet), fold: p.fold ? 1 : 0, alive: p.alive ? 1 : 0,
+    me: p.me ? 1 : 0, act: p.act ? 1 : 0, hd: p.hd ? 1 : 0, h: mpCards(p.h),
+  }));
+  const q = v.req;
+  o.req = q && typeof q == "object" ? Object.fromEntries(["toCall", "cur", "minR", "pot", "mx", "stack", "rem"].map((k) => [k, mpN(q[k])])) : null;
+  return o;
+}
 const MA = (t) => mpSend({ t: "act", a: t == "r" ? { t, x: MP.rx } : { t } }),
   MR = (y) => mpSend({ t: "re", y }),
+  MB = () => mpSend({ t: "back" }),
   MW = (i) => {
     if (Net.isHost()) {
       MP.watch[MP.me] = i;
@@ -237,8 +297,9 @@ const MA = (t) => mpSend({ t: "act", a: t == "r" ? { t, x: MP.rx } : { t } }),
     if (s) $("sl").value = v;
   };
 function mpRender(v) {
+  MP.v = v; // 描き直し用に、届いたままの形で持っておく
+  v = mpClean(v);
   G.mp = 1;
-  MP.v = v;
   MP.bb = v.bb;
   if (G.ty === undefined) G.ty = ls();
   const f = (x) => +(x / v.bb).toFixed(1);
@@ -252,33 +313,18 @@ function mpRender(v) {
     tmr();
   }
   const seat = (p) =>
-    `<div class="s${p.fold ? " f" : ""}${p.act ? " a" : ""}${p.me ? " h" : ""}"><b style="color:${p.col || "inherit"}">${mpEsc(p.name)}</b> <small>${p.me || !G.ty ? "" : mpEsc(p.ty)} ${p.lab || ""}${p.alive ? "" : " バスト"}</small><div>${f(p.stack)} BB</div><div>${p.h ? p.h.map((c) => cd(c)).join("") : p.hd ? cd(0, 1) + cd(0, 1) : "&nbsp;"}</div><em>${p.bet ? "bet " + f(p.bet) : ""}</em></div>`;
+    `<div class="s${p.fold ? " f" : ""}${p.act ? " a" : ""}${p.me ? " h" : ""}"><b style="color:${p.col || "inherit"}">${p.name}</b> <small>${p.me || !G.ty ? "" : p.ty} ${p.lab}${p.alive ? "" : " バスト"}</small><div>${f(p.stack)} BB</div><div>${p.h ? p.h.map((c) => cd(c)).join("") : p.hd ? cd(0, 1) + cd(0, 1) : "&nbsp;"}</div><em>${p.bet ? "bet " + f(p.bet) : ""}</em></div>`;
   const me = v.pl.find((p) => p.me);
   $("tb").innerHTML = `<div class=row>${v.pl.filter((p) => !p.me).map(seat).join("")}</div><div class=bd>${v.bd.map((c) => cd(c)).join("") || "&nbsp;"}<span>POT ${f(v.pot)} BB</span></div>${me ? seat(me) : ""}`;
-  let c = "";
   const q = v.req;
-  if (q) {
-    const mn = Math.min(q.cur + q.minR, q.mx);
-    MP.mn = MP.rx = mn;
-    MP.mx = q.mx;
-    MP.rt = Date.now() + q.rem;
-    c = `<div class=mu>残り <b id=rtv></b> 秒</div>`;
-    c += q.toCall
-      ? `<button class=g onclick="MA('f')">フォールド</button><button onclick="MA('c')">コール ${f(Math.min(q.toCall, q.stack))}BB</button>`
-      : `<button onclick="MA('c')">チェック</button>`;
-    if (q.mx > q.cur) {
-      const pr = q.cur
-        ? [[2, "2x"], [2.5, "2.5x"], [3, "3x"]].map(([k, n]) => [Math.round(q.cur * k), n])
-        : [[1 / 3, "1/3 Pot"], [0.5, "1/2 Pot"], [1, "1 Pot"]].map(([k, n]) => [Math.round(q.pot * k), n]);
-      c += `<div class=rs><input id=sl type=range min=${mn} max=${q.mx} value=${mn} oninput="MX(this.value)"><button onclick="MA('r')">${q.cur ? "レイズ" : "ベット"} <span id=rv>${f(mn)}</span>BB</button></div><div>${pr.map(([x, n]) => `<button class=g onclick="MX(${x},1)">${n}</button>`).join("")}<button class=g onclick="MX(${q.mx},1)">All-in</button></div>`;
-    }
-  } else MP.rt = 0;
-  if (!q && v.ask)
-    c = '<p>バストしました。リエントリー（開始スタック）しますか？</p><button onclick="MR(1)">リエントリー</button><button class=g onclick="MR(0)">終了</button>';
-  else if (!q && v.spec)
-    c = `<button class=g onclick="MW(${(v.ti + v.tn - 1) % v.tn})">◀</button> 卓 ${v.ti + 1} / ${v.tn} <button class=g onclick="MW(${(v.ti + 1) % v.tn})">▶</button><p class=mu>観戦では、公開された手札だけが見えます</p>`;
-  else if (!q) c = `<span class=mu>${v.wait ? "他の卓の終了を待っています…" : "他のプレイヤーのアクション中…"}</span>`;
-  $("ct").innerHTML = c;
+  MP.rt = q ? Date.now() + q.rem : 0;
+  // 操作欄は、中身が変わったときだけ作り直す（他の卓が進むたびに画面データが届くため。
+  // 毎回作り直すと、動かしかけたスライダーや選びかけたレイズ額が最小に戻ってしまう）
+  const ck = JSON.stringify([q && { ...q, rem: 0 }, v.bb, v.ask, v.away, v.spec, v.ti, v.tn, v.wait]);
+  if (ck != MP.ck) {
+    MP.ck = ck;
+    $("ct").innerHTML = mpControls(v, f);
+  }
   $("lg").innerHTML = v.lg.map((s) => `<div>${s}</div>`).join("");
   $("lg").scrollTop = 1e5;
   const ov = (t, s) => {
@@ -293,6 +339,33 @@ function mpRender(v) {
     ov(`${v.place}位 でフィニッシュ`, v.place <= v.itm ? "ITM（入賞）" : "ITM圏外");
   }
 }
+function mpControls(v, f) {
+  let c = "";
+  const q = v.req;
+  if (q) {
+    const mn = Math.min(q.cur + q.minR, q.mx);
+    MP.mn = MP.rx = mn;
+    MP.mx = q.mx;
+    c = `<div class=mu>残り <b id=rtv></b> 秒</div>`;
+    c += q.toCall
+      ? `<button class=g onclick="MA('f')">フォールド</button><button onclick="MA('c')">コール ${f(Math.min(q.toCall, q.stack))}BB</button>`
+      : `<button onclick="MA('c')">チェック</button>`;
+    if (q.mx > q.cur) {
+      const pr = q.cur
+        ? [[2, "2x"], [2.5, "2.5x"], [3, "3x"]].map(([k, n]) => [Math.round(q.cur * k), n])
+        : [[1 / 3, "1/3 Pot"], [0.5, "1/2 Pot"], [1, "1 Pot"]].map(([k, n]) => [Math.round(q.pot * k), n]);
+      c += `<div class=rs><input id=sl type=range min=${mn} max=${q.mx} value=${mn} oninput="MX(this.value)"><button onclick="MA('r')">${q.cur ? "レイズ" : "ベット"} <span id=rv>${f(mn)}</span>BB</button></div><div>${pr.map(([x, n]) => `<button class=g onclick="MX(${x},1)">${n}</button>`).join("")}<button class=g onclick="MX(${q.mx},1)">All-in</button></div>`;
+    }
+  }
+  if (!q && v.ask)
+    c = '<p>バストしました。リエントリー（開始スタック）しますか？</p><button onclick="MR(1)">リエントリー</button><button class=g onclick="MR(0)">終了</button>';
+  else if (!q && v.spec)
+    c = `<button class=g onclick="MW(${(v.ti + v.tn - 1) % v.tn})">◀</button> 卓 ${v.ti + 1} / ${v.tn} <button class=g onclick="MW(${(v.ti + 1) % v.tn})">▶</button><p class=mu>観戦では、公開された手札だけが見えます</p>`;
+  else if (!q && v.away)
+    c = '<p>離席中です（あなたの番は自動でチェック/フォールドします）</p><button onclick="MB()">戻る</button>';
+  else if (!q) c = `<span class=mu>${v.wait ? "他の卓の終了を待っています…" : "他のプレイヤーのアクション中…"}</span>`;
+  return c;
+}
 // ひとり用の render() は残し、みんなで遊ぶ間だけ最後のviewで描き直す（CPUタイプ表示の切替など）
 const _render = render;
 render = () => (G.mp && MP.v ? mpRender(MP.v) : _render());
@@ -302,10 +375,23 @@ setInterval(() => {
 }, 300);
 
 // ================= ロビー =================
+// 接続状態のお知らせ（ゲーム中も見える位置に出す）。html を渡すとボタンなども置ける
+function mpNote(s, html) {
+  const e = $("nb");
+  e.hidden = !s;
+  e.textContent = s || "";
+  if (html) e.insertAdjacentHTML("beforeend", html);
+}
 function mpShowGame() {
-  $("mp").hidden = 1;
   $("start").hidden = 1;
   $("game").hidden = 0;
+  if (Net.isHost()) {
+    // ホストはゲーム中も参加者一覧（退出させるボタン付き）を見られるように、ゲーム画面の下へ移す
+    $("game").appendChild($("mp"));
+    $("mpC").hidden = 1;
+    $("mpBk").hidden = 1;
+    $("mp").hidden = 0;
+  } else $("mp").hidden = 1;
 }
 function mpOpen() {
   $("mp").hidden = 0;
@@ -322,11 +408,12 @@ function mpRoster(r) {
     t.className = "tag";
     t.textContent = (p.host ? "ホスト・" : "") + (p.role === "spec" ? "観戦" : "プレイヤー");
     li.appendChild(t);
-    if (Net.isHost() && !p.host && !G.mp) {
+    if (Net.isHost() && !p.host) {
       const b = document.createElement("button");
       b.className = "g";
       b.textContent = "退出させる";
-      b.onclick = () => Net.kick(p.id);
+      // ゲーム中に退出させた人の席は、以後自動でチェック/フォールドになる
+      b.onclick = () => (!G.mp || confirm(p.name + " を退出させますか？（戻ってこられなくなります）")) && Net.kick(p.id);
       li.appendChild(b);
     }
     ul.appendChild(li);
@@ -343,7 +430,7 @@ function mpUI() {
 <div id="mpJ" ${HM ? "hidden" : ""}><input id="mjr" type="text" placeholder="部屋ID（例: alp-xxxxx）"><input id="mjn" type="text" maxlength="12" placeholder="プレイヤー名"><input id="mjp" type="password" placeholder="パスワード"><label><input type="radio" name="mro" value="player" checked> プレイヤー</label> <label><input type="radio" name="mro" value="spec"> 観戦</label><br><button id="mjb">入室</button></div>
 <p id="mpM" class="err"></p></div>
 <div id="mpRm" hidden><div id="mpI"></div><h4>参加者</h4><ul id="mpR" style="padding-left:20px"></ul><div id="mpC"></div><p id="mpS" class="ok"></p></div>
-<p><a href="${location.pathname}">ひとりで遊ぶに戻る</a></p>`;
+<p id="mpBk"><a href="${location.pathname}">ひとりで遊ぶに戻る</a></p>`;
   if (RM) $("mjr").value = RM;
   if (HM || RM) {
     $("mp").hidden = 0;
@@ -369,19 +456,40 @@ function mpUI() {
         $("mpC").innerHTML = '<button id="mgo">ゲーム開始</button>';
         $("mgo").onclick = mpStart;
       },
-      roster: mpRoster, msg: mpOnMsg, left: mpLeft, error: (e) => err("エラー：" + e),
+      roster: mpRoster, msg: mpOnMsg, left: mpLeft, rejoin: mpRejoin,
+      error: (e) => err("エラー：" + e),
+      status: (s) => mpNote(s),
     });
   };
-  $("mjb").onclick = () => {
-    const id = $("mjr").value.trim(), n = $("mjn").value.trim(), p = $("mjp").value;
-    if (!id || !n || !p) return err("すべて入力してください");
-    err("接続中…");
-    Net.join(id, n, p, document.querySelector("input[name=mro]:checked").value, {
+  // 復帰用の合言葉は部屋ごとにタブへ保存する（再読み込みしても同じ席に戻れる。別のタブとは共有しない）
+  const tokKey = (id) => "alp-tok:" + id,
+    tokGet = (id) => {
+      try {
+        return sessionStorage.getItem(tokKey(id)) || "";
+      } catch (e) {
+        return "";
+      }
+    },
+    tokSet = (id, t) => {
+      try {
+        t ? sessionStorage.setItem(tokKey(id), t) : sessionStorage.removeItem(tokKey(id));
+      } catch (e) {}
+    };
+  // 入室。一度入室できたあとに切れたら、合言葉で自動的に入り直す（数回まで）
+  const RETRY = 6;
+  const connect = () => {
+    const j = MP.jp;
+    clearTimeout(MP.rtT);
+    Net.join(j.id, j.n, j.p, j.role, tokGet(j.id), {
       joined: (m) => {
         MP.me = m.id;
+        MP.in = 1;
+        MP.retry = 0;
+        tokSet(j.id, m.tok);
         err("");
+        mpNote("");
         inRoom();
-        $("mpI").textContent = `部屋 ${m.room} に入室しました（${m.role === "spec" ? "観戦" : "プレイヤー"}）。ホストの開始を待っています。`;
+        $("mpI").textContent = `部屋 ${m.room} に入室しました（${m.name || j.n}・${m.role === "spec" ? "観戦" : "プレイヤー"}）。` + (m.started ? "" : "ホストの開始を待っています。");
         if (m.started) mpShowGame();
       },
       roster: mpRoster,
@@ -389,9 +497,40 @@ function mpUI() {
         if (m.t == "start") mpShowGame();
         else if (m.t == "view") mpRender(m.v);
       },
-      error: (e) => err(e),
-      closed: () => ($("mpS").textContent = "接続が切れました"),
+      error: (e, fatal) => {
+        if (fatal) {
+          tokSet(j.id, "");
+          MP.in = 0;
+          err(e);
+          return mpNote(e);
+        }
+        MP.in ? lost(e) : err(e);
+      },
+      closed: lost,
     });
+  };
+  const lost = (why) => {
+    if (MP.v && MP.v.over) return mpNote("大会が終了し、ホストとの接続が切れました");
+    if (++MP.retry > RETRY) {
+      mpNote(why + "。再接続できませんでした。", ' <button id="mrc">もう一度つなぐ</button>');
+      $("mrc").onclick = () => {
+        MP.retry = 0;
+        mpNote("再接続しています…");
+        connect();
+      };
+      return;
+    }
+    mpNote(`${why}。再接続しています…（${MP.retry}/${RETRY}）`);
+    clearTimeout(MP.rtT);
+    MP.rtT = setTimeout(connect, 1000 * Math.min(2 * MP.retry, 6));
+  };
+  $("mjb").onclick = () => {
+    const id = $("mjr").value.trim(), n = $("mjn").value.trim(), p = $("mjp").value;
+    if (!id || !n || !p) return err("すべて入力してください");
+    err("接続中…");
+    MP.jp = { id, n, p, role: document.querySelector("input[name=mro]:checked").value };
+    MP.retry = 0;
+    connect();
   };
 }
 mpUI();
