@@ -1,0 +1,64 @@
+<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>alpoker ロビー（接続テスト版）</title>
+<style>
+:root{--bg:#f1f4ef;--pn:#fff;--tx:#1d2a24;--mu:#5d7266;--ac:#b8861b;--bd:#c9d5cc;--ok:#2f6b50;--ng:#b3392b;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0f1a17;--pn:#16251f;--tx:#e8efe9;--mu:#8da598;--ac:#e0b44c;--bd:#2a3d34;--ok:#6fcf9f;--ng:#ff8a7a}}
+:root[data-theme=dark]{--bg:#0f1a17;--pn:#16251f;--tx:#e8efe9;--mu:#8da598;--ac:#e0b44c;--bd:#2a3d34;--ok:#6fcf9f;--ng:#ff8a7a}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.5 system-ui,"Hiragino Sans","Noto Sans JP",sans-serif}
+#app{max-width:720px;margin:0 auto;padding:12px}
+.pn{background:var(--pn);border:1px solid var(--bd);border-radius:10px;padding:12px;margin-bottom:10px}
+.cols{display:flex;flex-wrap:wrap;gap:16px}.cols>div{flex:1;min-width:240px}
+input[type=text],input[type=password]{display:block;width:100%;font:inherit;padding:8px;margin:6px 0;border:1px solid var(--bd);border-radius:8px;background:transparent;color:var(--tx)}
+button{font:inherit;background:var(--ac);color:#111;border:0;border-radius:8px;padding:8px 14px;margin:3px 3px 3px 0;cursor:pointer}
+button.g{background:transparent;color:var(--tx);border:1px solid var(--bd)}
+.mu{color:var(--mu);font-size:13px}.err{color:var(--ng)}.ok{color:var(--ok)}
+li{margin:4px 0}.tag{font-size:12px;padding:1px 6px;border:1px solid var(--bd);border-radius:6px;margin-left:6px;color:var(--mu)}
+code{background:rgba(127,127,127,.15);padding:1px 5px;border-radius:4px}
+</style></head><body><div id="app">
+<h2 style="margin-top:0">ロビー（接続テスト版）</h2>
+<p class="mu">ホストの部屋に、部屋ID・パスワード・名前で入室できるかを確認するためのページです（ゲーム本体はまだ接続していません）。</p>
+<div id="entry" class="pn"><div class="cols">
+ <div><h3 style="margin-top:0">部屋を作る（ホスト）</h3>
+  <input id="hn" type="text" maxlength="12" placeholder="プレイヤー名">
+  <input id="hp" type="password" placeholder="パスワード（参加者に伝える）">
+  <button id="mk">部屋を作る</button></div>
+ <div><h3 style="margin-top:0">入室する</h3>
+  <input id="jr" type="text" placeholder="部屋ID（例: alp-xxxxx）">
+  <input id="jn" type="text" maxlength="12" placeholder="プレイヤー名">
+  <input id="jp" type="password" placeholder="パスワード">
+  <label><input type="radio" name="ro" value="player" checked> プレイヤー</label>
+  <label><input type="radio" name="ro" value="spec"> 観戦</label><br>
+  <button id="jb">入室</button></div>
+</div><p id="msg" class="err"></p></div>
+<div id="room" class="pn" hidden>
+ <div id="info"></div>
+ <h3>参加者</h3><ul id="rs" style="padding-left:20px"></ul>
+ <div id="hc"></div><p id="st" class="ok"></p>
+ <button class="g" id="lv">退出</button>
+</div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="net.js"></script>
+<script>
+const $=i=>document.getElementById(i);let myId='';
+const err=s=>{$('msg').textContent=s||''};
+const q=new URLSearchParams(location.search).get('r');if(q)$('jr').value=q;
+function show(){$('entry').hidden=true;$('room').hidden=false}
+function roster(r){const ul=$('rs');ul.textContent='';
+ r.forEach(p=>{const li=document.createElement('li');li.textContent=p.name+(p.id===myId?'（あなた）':'');
+  const t=document.createElement('span');t.className='tag';t.textContent=(p.host?'ホスト・':'')+(p.role==='spec'?'観戦':'プレイヤー');li.appendChild(t);
+  if(Net.isHost()&&!p.host){const b=document.createElement('button');b.className='g';b.textContent='退出させる';b.onclick=()=>Net.kick(p.id);li.appendChild(b)}
+  ul.appendChild(li)})}
+$('mk').onclick=()=>{const n=$('hn').value.trim(),p=$('hp').value;if(!n||!p)return err('名前とパスワードを入力してください');err('部屋を作成中…');
+ Net.host(n,p,{ready:id=>{myId=id;err('');show();
+   const url=location.origin+location.pathname+'?r='+id;
+   $('info').innerHTML='<p>部屋ID：<code></code>　<button class="g" id="cp">招待URLをコピー</button></p><p class="mu">パスワードは別の方法で伝えてください。</p>';
+   $('info').querySelector('code').textContent=id;$('cp').onclick=()=>navigator.clipboard&&navigator.clipboard.writeText(url).then(()=>{$('cp').textContent='コピーしました'});
+   $('hc').innerHTML='<button id="go">開始（テスト）</button>';$('go').onclick=()=>{Net.setStarted(true);Net.bc({t:'start'});$('st').textContent='開始を全員に送信しました'}},
+  roster,error:e=>err('エラー：'+e),msg:(from,m)=>{}})};
+$('jb').onclick=()=>{const id=$('jr').value.trim(),n=$('jn').value.trim(),p=$('jp').value;if(!id||!n||!p)return err('すべて入力してください');err('接続中…');
+ Net.join(id,n,p,document.querySelector('input[name=ro]:checked').value,{joined:m=>{myId=m.id;err('');show();
+   $('info').innerHTML='<p>部屋 <code></code> に入室しました（'+(m.role==='spec'?'観戦':'プレイヤー')+'）。</p>';$('info').querySelector('code').textContent=m.room},
+  roster,error:e=>err(e),closed:()=>{$('st').className='err';$('st').textContent='接続が切れました'},msg:(f,m)=>{if(m.t==='start')$('st').textContent='ホストがゲームを開始しました'}})};
+$('lv').onclick=()=>{Net.leave();location.href=location.pathname};
+</script></body></html>
