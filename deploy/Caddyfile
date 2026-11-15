@@ -1,0 +1,28 @@
+# /etc/caddy/Caddyfile
+# https://kaina-lab.com/poker/      … ポーカーアプリの入口ページ（/var/www/poker）
+# https://kaina-lab.com/poker/mtt/  … このアプリ（Node・127.0.0.1:8080）
+# 証明書は Caddy が自動で取得・更新する（外から 80/443 に届くことが必要）
+kaina-lab.com {
+	# 末尾の / を付けて開き直す（付けないと、ページから読み込むファイルの場所がずれる）
+	redir /poker /poker/
+	redir /poker/mtt /poker/mtt/
+
+	# このアプリ：先頭の /poker/mtt を外して Node に渡す（WebSocket もそのまま通る）
+	handle_path /poker/mtt/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+	# 次のアプリはここに足す（ポートを変える）
+	# handle_path /poker/xxx/* {
+	# 	reverse_proxy 127.0.0.1:8081
+	# }
+
+	# 入口ページ
+	handle_path /poker/* {
+		root * /var/www/poker
+		file_server
+	}
+	# それ以外（トップなど）
+	handle {
+		respond "kaina-lab" 200
+	}
+}

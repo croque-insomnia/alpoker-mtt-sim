@@ -46,6 +46,8 @@ CREATE_KEY=身内だけの合言葉 npm start
 | `MAX_ROOMS` | 20 | 同時に開ける部屋の数 |
 
 - 外から使うときは、前に HTTPS を受け持つもの（Caddy や nginx など）を置く。WebSocket（`/ws`）も通すこと
+  - VPS への置き方（今 `https://kaina-lab.com/poker/mtt/` で動いている構成）は [`deploy/README.md`](deploy/README.md)
+  - `/poker/mtt/` のような途中のパスに置いても、そのまま動く
 - 誰もいなくなった部屋は 10 分で片付ける
 - **サーバーを再起動すると、遊んでいる途中の大会は消える**（部屋はメモリ上にあるため）。大会中の更新は避ける
 
