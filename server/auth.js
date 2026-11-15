@@ -132,6 +132,9 @@ function createAuth(opt) {
     });
   const sid = (req) => parseCookies(req.headers.cookie).alp_sid || "";
   const userFromReq = (req) => accounts.sessionUser(sid(req));
+  // このサイトのページから来たときだけ、Cookie のセッションを使う（別のサイトに仕込まれた接続・送信は、ゲストとして扱う）
+  const browserSid = (req) => (sameOrigin(req) ? sid(req) : ""),
+    browserUser = (req) => accounts.sessionUser(browserSid(req));
   // 戻り先は、このアプリの中のページだけ（外のサイトへ飛ばす踏み台にさせない）
   const safeNext = (n) => {
     try {
@@ -336,7 +339,7 @@ function createAuth(opt) {
     return new Promise((resolve) => srv.listen(port, "127.0.0.1", () => resolve(srv)));
   }
 
-  return { handle, userFromReq, sameOrigin, startLocalAdmin, enabled: () => !!Object.keys(prov).length, providers: () => Object.keys(prov) };
+  return { handle, userFromReq, browserSid, browserUser, startLocalAdmin, enabled: () => !!Object.keys(prov).length, providers: () => Object.keys(prov) };
 }
 
 module.exports = { createAuth, parseCookies, PROVIDERS };

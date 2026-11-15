@@ -58,7 +58,10 @@ function startServer(opt = {}) {
       adminKey: adm,
       ownerUid: o.ownerUid,
       guests: o.guests,
-      userOf: (cid) => users.get(cid) || null,
+      userOf: (cid) => {
+        const u = users.has(cid) && accounts.sessionUser(users.get(cid));
+        return u ? { id: u.id, name: u.name, role: u.role } : null;
+      },
       reservedName: (n) => accounts.nameTaken(n),
       send: (cid, m) => {
         const ws = socks.get(cid);
@@ -151,7 +154,7 @@ function startServer(opt = {}) {
         const pw = typeof m.pw == "string" ? m.pw : "";
         if (pw.length > 64) return json(res, 400, { why: "パスワードは64文字までにしてください" });
         // ログインしている人（このサイトのページから）は、合言葉なしで作れる。ゲストを入れるときだけパスワードが要る
-        const u = auth.sameOrigin(req) && auth.userFromReq(req);
+        const u = auth.browserUser(req);
         if (u) {
           const guests = !!m.guests;
           if (guests && !pw) return json(res, 400, { why: "ゲストも入れるときは、ゲスト用のパスワードを決めてください" });
@@ -180,7 +183,8 @@ function startServer(opt = {}) {
       res.writeHead(200, {
         "content-type": TYPES[path.extname(f)],
         "cache-control": "no-cache",
-        "referrer-policy": "no-referrer",
+        // same-origin：外のサイトには参照元を送らない。no-referrer にすると、ブラウザによっては書き込み（POST）の Origin が null になり、本人確認が通らない
+        "referrer-policy": "same-origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
       });
@@ -201,8 +205,9 @@ function startServer(opt = {}) {
     }
     r.socks.set(cid, ws);
     // ログインしている人か。別のサイトのページからの接続は、Cookie が付いていてもゲストとして扱う（なりすまし防止）
-    const u = auth.sameOrigin(req) && auth.userFromReq(req);
-    if (u) r.users.set(cid, { id: u.id, name: u.name, role: u.role });
+    // 覚えるのはセッションだけ。誰か・役割は使うたびに引き直す（止めた・ログアウトさせた・役割を変えた、がすぐ効くように）
+    const sid = auth.browserSid(req);
+    if (sid && accounts.sessionUser(sid)) r.users.set(cid, sid);
     ws.alive = true;
     ws.on("pong", () => (ws.alive = true));
     ws.on("message", (buf) => {
@@ -215,10 +220,10 @@ function startServer(opt = {}) {
       if (m && typeof m == "object") r.host.data(cid, m);
     });
     ws.on("close", () => {
+      r.users.delete(cid);
       if (r.socks.get(cid) !== ws) return; // こちらから閉じた接続
       r.socks.delete(cid);
       r.host.closed(cid);
-      r.users.delete(cid);
       if (r.host.empty()) r.empty = Date.now();
     });
     ws.on("error", () => {});

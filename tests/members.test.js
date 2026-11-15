@@ -230,3 +230,48 @@ test("止めたアカウントは、部屋に入るときもログインして�
   assert.match(C.last("error")[1], /メンバー専用/);
   assert.equal((await as(croque).create({ guests: false })).status, 403, "部屋も作れない（合言葉が要る）");
 });
+
+test("メンバー：開始前なら役割を選び直せる。ゲストと名前が重なっても入れる。途中でログインしたゲストは元の席に戻る", async (t) => {
+  const { member, as } = await boot(t);
+  const kaina = member("Kaina"), croque = member("Croque");
+  const { room } = await as(kaina).create({ guests: true, pw: "gpw" });
+  // 観戦で入ってから、プレイヤーで入り直す
+  const A = as(kaina).join(room, { role: "spec" });
+  await until(() => A.last("joined"));
+  assert.equal(A.last("joined")[1].role, "spec");
+  const A2 = as(kaina).join(room, { role: "player" });
+  await until(() => A2.last("joined"));
+  assert.equal(A2.last("joined")[1].role, "player");
+  // 先にゲストが使っている名前のアカウントが、あとからできた
+  const G = as(null).join(room, { name: "Taro", pw: "gpw" });
+  await until(() => G.last("joined"));
+  const taro = member("Taro");
+  const T = as(taro).join(room);
+  await until(() => T.last("joined"));
+  assert.equal(T.last("joined")[1].name, "Taro2");
+  // ゲストが途中でログインして入り直す：復帰用の合言葉で、元の席に戻る
+  const G2 = as(croque).join(room, { tok: G.last("joined")[1].tok });
+  await until(() => G2.last("joined"));
+  assert.deepEqual([G2.last("joined")[1].name, G2.last("joined")[1].back], ["Taro", 1]);
+  [A2, T, G2].forEach((c) => c.j.leave());
+});
+
+test("入室中でも、止めた人は外れ、管理者から外した人は操作できなくなる", async (t) => {
+  const { srv, accounts, member, as } = await boot(t);
+  const croque = member("Croque"), boss = member("Boss", "admin"), kaina = member("Kaina", "admin");
+  const { room } = await as(croque).create({ guests: false });
+  const C = as(croque).join(room), B = as(boss).join(room), K = as(kaina).join(room);
+  await until(() => C.last("joined") && B.last("joined") && K.last("joined"));
+  // 管理者から外す → 開始の操作が通らない
+  accounts.setRole(boss.user.id, "member");
+  B.j.send({ t: "admin", a: "start", dur: 5 });
+  await new Promise((r) => setTimeout(r, 100));
+  assert.ok(!srv.rooms.get(room).host.room.started());
+  // 止める → 次に何か送ったところで外される
+  accounts.setDisabled(boss.user.id, true);
+  B.j.send({ t: "back" });
+  await until(() => B.last("error"));
+  assert.match(B.last("error")[1], /ログインが切れました/);
+  await until(() => !C.last("roster")[1].some((p) => p.name == "Boss"));
+  [C, K].forEach((c) => c.j.leave());
+});

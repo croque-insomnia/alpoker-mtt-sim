@@ -185,3 +185,17 @@ test("大会が終わったら onOver が呼ばれる", () => {
   clock.run(1e6, () => last.a && last.a.req && room.msg("a", { t: "act", a: { t: "c" } }));
   assert.ok(over && over.over && over.hist.length > 0);
 });
+
+test("打ち方の記録：離席中の自動の行動は数えない", () => {
+  const clock = fakeClock();
+  const last = {};
+  const room = createRoom({ deliver: (id, m) => m.t == "view" && (last[id] = m.v), members: () => ["a", "b"], clock });
+  room.start([{ id: "a", name: "A" }, { id: "b", name: "B" }], 1);
+  const g = room.state();
+  room.left("b"); // b は最初から離席（全部、自動のチェック/フォールド）
+  clock.run(1e6, () => last.a && last.a.req && room.msg("a", { t: "act", a: { t: "c" } }));
+  const [a, b] = ["a", "b"].map((id) => g.P.find((p) => p.name == id.toUpperCase()));
+  assert.ok(a.rec[0].hands > 0, "席にいた人は数える");
+  assert.equal(b.rec[0].hands || 0, 0, "離席中のハンドは数えない");
+  assert.ok(g.hist.every((H) => H.seats.every((s) => s.uid === null)), "アカウントでない席の uid は null");
+});
