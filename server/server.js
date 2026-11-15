@@ -7,6 +7,7 @@
 //   CREATE_KEY  部屋を作るときに必要な合言葉。設定すると、知っている人しか部屋を作れない（身内用に推奨）
 //   DATA_DIR    ネームドCPUの記憶・ハンド履歴（hands/）を保存するフォルダ（既定 ./data）
 //   MAX_ROOMS   同時に開ける部屋の数（既定 20）
+//   ログイン（Discord / Google）の設定は auth.js の先頭を参照（PUBLIC_URL・*_CLIENT_ID など）
 // 部屋の進行と入室の受付は room.js（ホストのブラウザで動くものと同じ）。ここは「つなぐ」と「片付ける」だけ。
 "use strict";
 const http = require("http"),
@@ -17,11 +18,13 @@ const { WebSocketServer } = require("ws");
 const { createHost } = require("../room.js");
 const { fileStamp } = require("../engine.js");
 const { fileStore } = require("./store.js");
+const { openAccounts } = require("./accounts.js");
+const { createAuth } = require("./auth.js");
 
 const ROOT = path.join(__dirname, ".."),
   // 配信するファイル（これ以外は 404）
-  FILES = { "/": "index.html", "/index.html": "index.html", "/style.css": "style.css" };
-for (const f of ["engine.js", "room.js", "net.js", "game.js", "mp.js"]) FILES["/" + f] = f;
+  FILES = { "/": "index.html", "/index.html": "index.html", "/style.css": "style.css", "/account.html": "account.html" };
+for (const f of ["engine.js", "room.js", "net.js", "game.js", "mp.js", "account.js"]) FILES["/" + f] = f;
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8" };
 const IDLE_MS = 10 * 60e3, // 誰もいない部屋を片付けるまでの時間
   PING_MS = 25e3, // 生きているかの確認の間隔（スマホのスリープなどで切れた接続を見つける）
@@ -35,7 +38,9 @@ function startServer(opt = {}) {
     idleMs = opt.idleMs || IDLE_MS,
     dataDir = path.resolve(env.DATA_DIR || path.join(ROOT, "data")),
     store = opt.store || fileStore(path.join(dataDir, "store.json")),
-    log = opt.quiet ? () => {} : (...a) => console.log(new Date().toISOString(), ...a);
+    log = opt.quiet ? () => {} : (...a) => console.log(new Date().toISOString(), ...a),
+    accounts = opt.accounts || openAccounts(path.join(dataDir, "accounts.json")),
+    auth = createAuth({ env, accounts, log, fetch: opt.fetch, providers: opt.providers });
   const rooms = new Map(); // 部屋ID -> { host, socks: Map(接続id -> ws), empty: 誰もいなくなった時刻 }
   const rid = () => "alp-" + crypto.randomBytes(4).toString("hex").slice(0, 6);
   const secret = () => crypto.randomBytes(12).toString("base64url");
@@ -105,10 +110,24 @@ function startServer(opt = {}) {
     res.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
     res.end(JSON.stringify(obj));
   };
-  const server = http.createServer((req, res) => {
-    const url = new URL(req.url, "http://x");
+  const server = http.createServer(async (req, res) => {
+    let url;
+    try {
+      url = new URL(req.url, "http://x");
+    } catch (e) {
+      // 読めない URL（"//" など）。ここで投げるとプロセスごと落ちる
+      res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+      return res.end("bad request");
+    }
     if (url.pathname === "/api/hello" && req.method === "GET")
-      return json(res, 200, { server: 1, needKey: !!createKey });
+      return json(res, 200, { server: 1, needKey: !!createKey, auth: auth.enabled() ? 1 : 0 });
+    try {
+      if (await auth.handle(req, res, url)) return;
+    } catch (e) {
+      log("auth error", e.stack || e.message);
+      if (!res.headersSent) json(res, 500, { why: "サーバーの中で問題が起きました" });
+      return;
+    }
     if (url.pathname === "/api/rooms" && req.method === "POST") {
       let body = "";
       req.on("data", (c) => {
@@ -140,8 +159,14 @@ function startServer(opt = {}) {
         res.writeHead(500);
         return res.end();
       }
-      // 更新がすぐ届くように、毎回確認させる
-      res.writeHead(200, { "content-type": TYPES[path.extname(f)], "cache-control": "no-cache" });
+      // 更新がすぐ届くように、毎回確認させる。招待の合言葉が入った URL が、外へのリンクで漏れないようにする
+      res.writeHead(200, {
+        "content-type": TYPES[path.extname(f)],
+        "cache-control": "no-cache",
+        "referrer-policy": "no-referrer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+      });
       res.end(buf);
     });
   });
@@ -193,17 +218,30 @@ function startServer(opt = {}) {
     }
   }, opt.tickMs || PING_MS);
 
+  // 期限切れのセッション・招待を1時間ごとに掃除する
+  const sweeper = setInterval(() => accounts.sweep(), 36e5);
+  // 管理用の口：ADMIN_PORT を設定したときだけ開く（"auto" は空いているポート。テスト用）
+  const adminPort = env.ADMIN_PORT === "auto" ? 0 : +env.ADMIN_PORT || null;
   return new Promise((resolve) => {
-    server.listen(port, env.HOST || "0.0.0.0", () => {
+    server.listen(port, env.HOST || "0.0.0.0", async () => {
       const addr = server.address();
       log(`listening on http://localhost:${addr.port}` + (createKey ? "（部屋の作成に合言葉が必要）" : ""));
+      const local = adminPort != null ? await auth.startLocalAdmin(adminPort) : null;
+      if (local) log(`admin port: 127.0.0.1:${local.address().port}`);
+      if (auth.enabled()) log("login:", auth.providers().join(", "));
+      if (auth.enabled() && !accounts.hasAdmin()) log("管理者がまだいません。VPS 上で npm run admin -- invite admin を実行して、招待リンクから入ってください");
       resolve({
+        adminPort: local && local.address().port,
+        accounts,
         port: addr.port,
         rooms,
         saveHands, // テスト用
         close: () =>
           new Promise((r) => {
             clearInterval(timer);
+            clearInterval(sweeper);
+            local && local.close();
+            accounts.flush();
             for (const id of [...rooms.keys()]) closeRoom(id, "shutdown");
             wss.close();
             server.close(() => r());

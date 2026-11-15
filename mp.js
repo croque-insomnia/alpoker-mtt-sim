@@ -198,6 +198,21 @@ function mpRoster(r) {
     ul.appendChild(li);
   });
 }
+// 簡易サーバーでログインが使えるとき、最初の画面に「ログイン中：名前」かログインへのリンクを出す
+function mpAccount() {
+  fetch("api/me", { cache: "no-store" })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((me) => {
+      if (!me || !me.enabled) return;
+      const e = $("acct"), a = document.createElement("a");
+      a.href = "account.html";
+      e.textContent = me.user ? `ログイン中：${me.user.name}　` : "";
+      a.textContent = me.user ? "アカウント" : "ログイン（Discord / Google）";
+      e.appendChild(a);
+      e.hidden = false;
+    })
+    .catch(() => {});
+}
 function mpUI() {
   const qs = new URLSearchParams(location.search),
     HM = qs.has("host"),
@@ -222,6 +237,7 @@ function mpUI() {
     if (!s) return;
     Net.use(wsLink(location.href));
     $("mhk").hidden = !s.needKey;
+    if (s.auth) mpAccount();
   });
   // 招待用の表示（部屋IDと招待URL）
   const invite = (id) => {

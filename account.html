@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="referrer" content="no-referrer" />
+    <title>アカウント</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div class="pn">
+        <h2 style="margin-top: 0">アカウント</h2>
+        <p id="msg" hidden></p>
+        <div id="out" hidden>
+          <p id="lead"></p>
+          <div id="btns"></div>
+          <p class="mu">メールアドレスなどは受け取りません。外部サービスでの ID と表示名・アイコンだけを使います。</p>
+        </div>
+        <div id="in" hidden>
+          <p>ログイン中：<b id="nm"></b> <span id="rl" class="tag"></span></p>
+          <p>表示名 <input id="nmi" type="text" maxlength="12" /> <button class="g" id="nmb">変える</button></p>
+          <h4>ログイン方法</h4>
+          <ul id="ids" style="padding-left: 20px"></ul>
+          <p><button class="g" id="lo">ログアウト</button> <button class="g" id="loa">すべての端末からログアウト</button></p>
+        </div>
+        <p><a href="./">ゲームに戻る</a></p>
+      </div>
+      <div class="pn" id="adm" hidden>
+        <h3 style="margin-top: 0">管理</h3>
+        <p>
+          招待リンクを作る（7日間・1回だけ）：<button id="ivm">メンバー用</button> <button class="g" id="iva">管理者用</button>
+        </p>
+        <p id="ivo" hidden><input id="ivu" type="text" readonly style="width: 100%" /> <button class="g" id="ivc">コピー</button></p>
+        <p class="mu" id="gd" hidden>Discord サーバーのメンバーは、招待なしで Discord から入れます。</p>
+        <h4>メンバー</h4>
+        <ul id="us" style="padding-left: 20px"></ul>
+      </div>
+    </div>
+    <script src="account.js"></script>
+  </body>
+</html>

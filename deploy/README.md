@@ -127,6 +127,73 @@ sudo journalctl -u caddy -n 40 --no-pager | grep -iE "obtain|challenge|error|cer
 
 ファイアウォールを開けたあとは `sudo systemctl restart caddy` で、すぐ取り直させられる。
 
+## 7. ログイン（Discord / Google）
+
+ログインしなくても今まで通り遊べる（ゲスト）。ログインは、戦績などをアカウントに溜めるためのもの。
+
+### Discord
+
+1. https://discord.com/developers/applications で「New Application」を作る（名前は何でもよい）
+2. 「OAuth2」を開き、**Client ID** を控える。「Reset Secret」で **Client Secret** を出して控える（一度しか表示されない）
+3. 同じ画面の「Redirects」に、次を追加して保存する
+   `https://kaina-lab.com/poker/mtt/auth/discord/callback`
+4. 身内の Discord サーバーの **サーバー ID** を控える（Discord の設定 → 詳細設定 → 開発者モードを ON → サーバー名を右クリック →「サーバー ID をコピー」）
+   - このサーバーのメンバーは、招待なしで Discord から入れる
+
+### Google
+
+1. https://console.cloud.google.com でプロジェクトを作る
+2. 「Google Auth Platform」（または「OAuth 同意画面」）を開き、アプリ名・サポート用のメールを入れる。対象は「外部」
+   - **公開ステータスを「本番」にする**。「テスト」のままだと、登録したテストユーザーしかログインできない
+   - 頼む権限は名前とアイコンだけ（`openid profile`）なので、審査は要らないはず（画面の案内に従う）
+3. 「クライアント」で「ウェブ アプリケーション」のクライアントを作り、「承認済みのリダイレクト URI」に次を追加する
+   `https://kaina-lab.com/poker/mtt/auth/google/callback`
+4. **クライアント ID** と **クライアント シークレット** を控える
+
+### VPS の設定
+
+控えた値を `/etc/alpoker.env` に1行ずつ足す（`CREATE_KEY` の行は残す）。**リポジトリには書かない**。
+
+```bash
+sudo nano /etc/alpoker.env
+```
+
+```
+CREATE_KEY=（今のまま）
+DISCORD_CLIENT_ID=控えた値
+DISCORD_CLIENT_SECRET=控えた値
+DISCORD_GUILD_ID=控えたサーバーID
+GOOGLE_CLIENT_ID=控えた値
+GOOGLE_CLIENT_SECRET=控えた値
+```
+
+`PUBLIC_URL` などは `deploy/alpoker.service` に入っているので、service を入れ直して再起動する（**遊んでいる途中の大会は消える**）:
+
+```bash
+cd /opt/alpoker-mtt-sim
+sudo cp deploy/alpoker.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl restart alpoker
+sudo journalctl -u alpoker -n 10 --no-pager    # 「login: discord, google」が出ていれば OK
+```
+
+### 最初の管理者
+
+VPS の上で招待リンクを出し、そのリンクを自分のブラウザで開いて、Discord か Google でログインする:
+
+```bash
+cd /opt/alpoker-mtt-sim && npm run admin -- invite admin
+```
+
+そのあとは、アカウント画面（`https://kaina-lab.com/poker/mtt/account.html`）の「管理」から、招待リンクの発行・役割の変更・ログアウトさせるができる。
+
+| コマンド（VPS の上で） | 用途 |
+|---|---|
+| `npm run admin -- invite admin` / `npm run admin -- invite` | 管理者用 / メンバー用の招待リンク（7日間・1回だけ） |
+| `npm run admin -- login <名前>` | 緊急ログインリンク（Discord / Google が落ちているときなど。15分・1回だけ） |
+| `npm run admin -- users` | アカウントの一覧 |
+
+アカウントは `/var/lib/alpoker/accounts.json` に入る（セッションと招待は、合言葉そのものではなくハッシュだけを保存する）。
+
 ## 更新するとき
 
 **再起動すると、遊んでいる途中の大会は消える**（部屋はメモリ上にある）。誰も遊んでいないときに:
