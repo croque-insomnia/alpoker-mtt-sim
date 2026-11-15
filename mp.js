@@ -19,6 +19,17 @@ const mpSend = (m) => (HOST ? HOST.localMsg(m) : Net.send(m));
 function mpRecv(m) {
   if (m.t == "start") mpShowGame();
   else if (m.t == "view") mpRender(m.v);
+  else if (m.t == "hands" && MP.hx) {
+    const kind = MP.hx;
+    MP.hx = "";
+    saveHands(Array.isArray(m.h) ? m.h : [], kind, m.over ? "（全員の手札つき）" : "（大会中なので、自分の手札と公開された手札だけ）");
+  }
+}
+// ハンド履歴を部屋に頼む（届いたら mpRecv で保存する）
+function mpHands(kind) {
+  MP.hx = kind;
+  $("hxm").textContent = "ハンド履歴を取得しています…";
+  mpSend({ t: "hands" });
 }
 
 // ================= 画面（ホストも参加者も同じ描画） =================

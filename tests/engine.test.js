@@ -88,3 +88,65 @@ test("時間が来たらレベルが上がる（最大レベルで止まる）",
   E.advanceLevel(g, 1e9);
   assert.equal(g.lv, E.LV.length - 1);
 });
+
+// ---- ハンド履歴 ----
+function soloWithHistory(n = 40) {
+  const m = new Map(), store = { get: (k) => m.get(k) ?? null, set: (k, v) => m.set(k, v) };
+  const g = { dur: 6e4, lv: 2, entries: 40, lg: [], lvEnd: 0, hist: [] };
+  E.soloSetup(g, store);
+  for (let i = 0; i < n && g.T.p.filter((p) => p.stack > 0).length > 1; i++) {
+    E.playHand(g, g.T);
+    E.bust(g, g.T);
+  }
+  return g;
+}
+
+test("ハンド履歴：人間が配られたハンドを、チップの出入りが合う形で残す", () => {
+  const g = soloWithHistory();
+  assert.ok(g.hist.length > 10);
+  g.hist.forEach((H, k) => {
+    assert.equal(H.n, k + 1);
+    assert.ok(H.seats.some((s) => s.hero), "人間が配られている");
+    const st = H.seats.reduce((a, s) => a + s.st, 0), end = H.seats.reduce((a, s) => a + s.end, 0);
+    assert.equal(st, end, `#${H.n} 開始と終了のチップの合計`);
+    assert.equal(H.win.reduce((a, w) => a + w.x, 0) > 0, true);
+    assert.ok(H.acts.every((a) => H.seats[a.i] && "fkcbr".includes(a.a)));
+    assert.ok([0, 3, 4, 5].includes(H.bd.length));
+    H.acts.forEach((a) => assert.ok(a.s <= H.bd.length));
+    assert.match(H.seats[0].pos, /^D/, "ボタンから順（ヘッズアップでは D SB）");
+    if (H.sd.length) H.sd.forEach((x) => assert.equal(H.seats[x.i].shown, 1));
+  });
+  // 人間のいない卓のハンドは残さない
+  const other = g.tables.find((t) => t != g.T);
+  const before = g.hist.length;
+  E.playHand(g, other);
+  assert.equal(g.hist.length, before);
+});
+
+test("ハンド履歴：見せる相手に合わせて手札を隠す", () => {
+  const g = soloWithHistory(20);
+  const all = E.histView(g.hist, null);
+  assert.ok(all.every((H) => H.seats.every((s) => s.h)), "絞らなければ全員の手札");
+  const cpu = g.T.p.find((p) => !p.hero);
+  const mine = E.histView(g.hist, cpu.oid);
+  assert.ok(mine.length > 0 && mine.every((H) => H.seats.some((s) => s.oid == cpu.oid)));
+  mine.forEach((H) =>
+    H.seats.forEach((s) => {
+      if (s.oid == cpu.oid || s.shown) assert.ok(s.h);
+      else assert.equal(s.h, null);
+    }),
+  );
+  // もとの記録は書き換えない
+  assert.ok(g.hist.every((H) => H.seats.every((s) => s.h)));
+  assert.equal(E.histView(g.hist, "nobody").length, 0);
+});
+
+test("ハンド履歴：テキストにできる", () => {
+  const g = soloWithHistory(15);
+  const t = E.histText(g.hist);
+  assert.match(t, /^#1 {2}Lv3/);
+  assert.match(t, /-- プリフロップ/);
+  assert.match(t, /▶ .+ が [\d.]+BB 獲得/);
+  assert.match(t, /\[[2-9TJQKA][♠♥♦♣] [2-9TJQKA][♠♥♦♣]\]/);
+  assert.equal(t.split("\n\n").length, g.hist.length);
+});

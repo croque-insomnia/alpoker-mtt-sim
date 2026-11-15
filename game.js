@@ -1,6 +1,6 @@
 // game.js — ひとり用の画面と進行。ゲームの中身（ルール・CPU）は engine.js にある。
 const $ = (i) => document.getElementById(i);
-const { LV, cd, hand, bust, bal, advanceLevel, playHand, soloSetup, saveMem, meStats, REC_KEYS, MEK, ME_DECAY, ME_PRIOR } =
+const { LV, cd, hand, bust, bal, advanceLevel, playHand, soloSetup, saveMem, meStats, REC_KEYS, MEK, ME_DECAY, ME_PRIOR, histText } =
   AlpEngine;
 // ブラウザの保存先（ネームドCPUの記憶などに使う）
 const LS = {
@@ -270,8 +270,33 @@ function resetMe() {
   } catch (e) {}
   renderMe();
 }
+// ---- ハンド履歴の保存（あなたが配られたハンド。ひとり用は全員の手札つき） ----
+// kind: "txt"（読む用）/ "json"（道具に渡す用）。みんなで遊ぶときは部屋に頼んで、届いたら保存する（mp.js）
+function saveFile(name, text, type) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+function saveHands(hands, kind, extra) {
+  const d = new Date(),
+    two = (x) => String(x).padStart(2, "0"),
+    stamp = `${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}`;
+  if (!hands || !hands.length) return ($("hxm").textContent = "まだ記録されたハンドがありません");
+  $("hxm").textContent = `${hands.length}ハンドを保存しました` + (extra || "");
+  if (kind == "json")
+    saveFile(`alpoker-hands-${stamp}.json`, JSON.stringify({ format: "alpoker-hands", version: 1, hands }, null, 1), "application/json");
+  else saveFile(`alpoker-hands-${stamp}.txt`, histText(hands), "text/plain;charset=utf-8");
+}
+function HX(kind) {
+  if (G.mp && typeof mpHands == "function") return mpHands(kind);
+  saveHands(G.hist, kind);
+}
 function begin() {
-  G = { dur: +$("spd").value * 6e4, lv: 0, entries: 40, lg: [], ty: ls() };
+  G = { dur: +$("spd").value * 6e4, lv: 0, entries: 40, lg: [], ty: ls(), hist: [] };
   $("tyc").checked = G.ty;
   G.lvEnd = Date.now() + G.dur;
   soloSetup(G, LS);

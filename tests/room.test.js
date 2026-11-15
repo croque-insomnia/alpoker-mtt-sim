@@ -120,3 +120,56 @@ test("他の人の番に送った行動は無視される", () => {
   room.msg(other, { t: "act", a: { t: "f" } });
   assert.ok(t.req && t.req.p.pid == turn, "番は動かない");
 });
+
+test("ハンド履歴：大会中は自分のハンドだけ、終わったら全員の手札つき", () => {
+  const clock = fakeClock();
+  const got = {}, last = {};
+  const room = createRoom({
+    deliver: (id, m) => {
+      if (m.t == "view") last[id] = m.v;
+      if (m.t == "hands") got[id] = m;
+    },
+    members: () => ["a", "b", "w"],
+    clock,
+  });
+  room.start([{ id: "a", name: "A" }, { id: "b", name: "B" }], 1);
+  const g = room.state();
+  const act = () => {
+    for (const id of ["a", "b"]) if (last[id] && last[id].req) room.msg(id, { t: "act", a: { t: last[id].req.toCall ? "c" : "c" } });
+  };
+  // 数ハンド進めて、大会中の履歴を頼む
+  while (g.hist.length < 3 && !g.over) {
+    assert.ok(clock.step());
+    act();
+  }
+  assert.ok(!g.over && g.hist.length > 0);
+  room.msg("a", { t: "hands" });
+  room.msg("w", { t: "hands" });
+  const a = g.P.find((p) => p.pid == "a");
+  assert.equal(got.a.over, 0);
+  assert.ok(got.a.h.length > 0 && got.a.h.every((H) => H.seats.some((s) => s.oid == a.oid)));
+  got.a.h.forEach((H) => H.seats.forEach((s) => s.oid != a.oid && !s.shown && assert.equal(s.h, null)));
+  assert.deepEqual(got.w.h, [], "観戦者には大会中は何も送らない");
+  // 続けて頼んでも、すぐには送らない
+  delete got.a;
+  room.msg("a", { t: "hands" });
+  assert.equal(got.a, undefined);
+  // 最後まで進めると、全ハンドを全員の手札つきで送る
+  clock.run(1e6, act);
+  assert.ok(g.over);
+  clock.advance(3000);
+  room.msg("w", { t: "hands" });
+  assert.equal(got.w.over, 1);
+  assert.equal(got.w.h.length, g.hist.length);
+  assert.ok(got.w.h.every((H) => H.seats.every((s) => s.h)));
+});
+
+test("大会が終わったら onOver が呼ばれる", () => {
+  const clock = fakeClock();
+  let over = null;
+  const last = {};
+  const room = createRoom({ deliver: (id, m) => m.t == "view" && (last[id] = m.v), members: () => ["a"], clock, onOver: (g) => (over = g) });
+  room.start([{ id: "a", name: "A" }], 1);
+  clock.run(1e6, () => last.a && last.a.req && room.msg("a", { t: "act", a: { t: "c" } }));
+  assert.ok(over && over.over && over.hist.length > 0);
+});

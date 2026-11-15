@@ -5,7 +5,7 @@
 //   PORT        待ち受けるポート（既定 8080）
 //   HOST        待ち受けるアドレス（既定 0.0.0.0）
 //   CREATE_KEY  部屋を作るときに必要な合言葉。設定すると、知っている人しか部屋を作れない（身内用に推奨）
-//   DATA_DIR    ネームドCPUの記憶などを保存するフォルダ（既定 ./data）
+//   DATA_DIR    ネームドCPUの記憶・ハンド履歴（hands/）を保存するフォルダ（既定 ./data）
 //   MAX_ROOMS   同時に開ける部屋の数（既定 20）
 // 部屋の進行と入室の受付は room.js（ホストのブラウザで動くものと同じ）。ここは「つなぐ」と「片付ける」だけ。
 "use strict";
@@ -32,7 +32,8 @@ function startServer(opt = {}) {
     createKey = env.CREATE_KEY || "",
     maxRooms = +env.MAX_ROOMS || 20,
     idleMs = opt.idleMs || IDLE_MS,
-    store = opt.store || fileStore(path.resolve(env.DATA_DIR || path.join(ROOT, "data"), "store.json")),
+    dataDir = path.resolve(env.DATA_DIR || path.join(ROOT, "data")),
+    store = opt.store || fileStore(path.join(dataDir, "store.json")),
     log = opt.quiet ? () => {} : (...a) => console.log(new Date().toISOString(), ...a);
   const rooms = new Map(); // 部屋ID -> { host, socks: Map(接続id -> ws), empty: 誰もいなくなった時刻 }
   const rid = () => "alp-" + crypto.randomBytes(4).toString("hex").slice(0, 6);
@@ -57,10 +58,31 @@ function startServer(opt = {}) {
         ws && ws.close();
       },
       store,
+      onOver: (g) => saveHands(id, g),
     });
     rooms.set(id, { host, socks, empty: Date.now() });
     log("room open", id, "rooms:", rooms.size);
     return { room: id, adm };
+  }
+  // 大会が終わったら、ハンド履歴をファイルに残す（DATA_DIR/hands/日時-部屋ID.json）
+  function saveHands(id, g) {
+    const d = new Date(),
+      two = (x) => String(x).padStart(2, "0"),
+      stamp = `${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}`,
+      file = path.join(dataDir, "hands", `${stamp}-${id}.json`),
+      body = {
+        format: "alpoker-hands",
+        version: 1,
+        room: id,
+        finishedAt: d.toISOString(),
+        entries: g.entries,
+        players: g.P.filter((p) => p.hero).map((p) => ({ name: p.name, place: p.place || 0, re: p.re })),
+        hands: g.hist,
+      };
+    fs.mkdir(path.dirname(file), { recursive: true }, (e) => {
+      if (e) return log("hands: フォルダを作れません", e.message);
+      fs.writeFile(file, JSON.stringify(body), (e2) => (e2 ? log("hands: 保存できません", e2.message) : log("hands saved", file, g.hist.length)));
+    });
   }
   function closeRoom(id, why) {
     const r = rooms.get(id);
@@ -171,6 +193,7 @@ function startServer(opt = {}) {
       resolve({
         port: addr.port,
         rooms,
+        saveHands, // テスト用
         close: () =>
           new Promise((r) => {
             clearInterval(timer);

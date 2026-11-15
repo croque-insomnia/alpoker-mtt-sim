@@ -7,7 +7,7 @@
 (function (root) {
 "use strict";
 const E = typeof AlpEngine != "undefined" ? AlpEngine : require("./engine.js");
-const { LV, CPU0, TYC, NM, NC, fromType, shf, alive, itm, hand, bust, bal, advanceLevel, autoAct, playHand, loadMem } = E;
+const { LV, CPU0, TYC, NM, NC, fromType, shf, alive, itm, hand, bust, bal, advanceLevel, autoAct, playHand, loadMem, histView } = E;
 const ACT_MS = 25000, // 1回の持ち時間。切れたらチェック（できなければフォールド）して離席扱いにする
   ASK_MS = 20000; // リエントリーを選ぶ時間
 const realClock = {
@@ -26,12 +26,14 @@ const memStore = () => {
 // o.local: ホスト自身がこの場で遊ぶときの id（その人の画面は最後に更新する）。サーバーでは不要
 // o.store: ネームドCPUの記憶の保存先 { get, set }（省略するとその場限り）
 // o.clock: { now, setTimeout, clearTimeout }（テストで時間を早送りするため。省略すると本物の時計）
+// o.onOver(g): 大会が終わったとき（サーバーでハンド履歴をファイルに残すのに使う）
 function createRoom(o) {
   const ck0 = o.clock || realClock,
     // stop() のあとは、残っているタイマーが来ても何もしない（サーバーで部屋を片付けるとき用）
     ck = { now: ck0.now, setTimeout: (f, ms) => ck0.setTimeout(() => !stopped && f(), ms), clearTimeout: ck0.clearTimeout },
     store = o.store || memStore(),
-    watch = {}; // 観戦中の人が見ている卓
+    watch = {}, // 観戦中の人が見ている卓
+    asked = {}; // ハンド履歴を最後に求められた時刻（続けて何度も送らないため）
   let stopped = false,
     g = null, // 大会の状態（開始前は null）
     open = 0, // このラウンドで人間の操作を待っている卓の数
@@ -44,7 +46,7 @@ function createRoom(o) {
   // players: [{ id, name }]（人間のプレイヤー。順番どおりに番号を振る） / durMin: ブラインド間隔（分）
   function start(players, durMin) {
     if (g || !players.length) return false;
-    g = { dur: durMin * 6e4, lv: 0, entries: 40, mp: 1 };
+    g = { dur: durMin * 6e4, lv: 0, entries: 40, mp: 1, hist: [] };
     g.lvEnd = ck.now() + g.dur;
     const nh = players.length,
       used = new Set(players.map((h) => h.name.toLowerCase())),
@@ -178,7 +180,8 @@ function createRoom(o) {
       g.over = 1;
       const w = g.P.find((p) => p.alive);
       if (w && w.hero) w.place = 1;
-      return push();
+      push();
+      return o.onOver && o.onOver(g);
     }
     push();
     ck.setTimeout(round, 800);
@@ -196,10 +199,20 @@ function createRoom(o) {
     if (m.t == "act") act(from, m.a);
     else if (m.t == "re") re(from, !!m.y);
     else if (m.t == "back") back(from);
+    else if (m.t == "hands") hands(from);
     else if (m.t == "watch") {
       watch[from] = m.i | 0;
       push();
     }
+  }
+  // ハンド履歴を送る。大会中は「自分が配られたハンド」だけで、見えるのは自分の手札と公開された手札だけ。
+  // 大会が終わったら、全ハンドを全員の手札つきで送る（終わってから振り返るため）
+  function hands(from) {
+    const now = ck.now();
+    if (now - (asked[from] || 0) < 2000) return;
+    asked[from] = now;
+    const me = g.P.find((p) => p.pid == from);
+    o.deliver(from, { t: "hands", over: g.over ? 1 : 0, h: g.over ? histView(g.hist, null) : me ? histView(g.hist, me.oid) : [] });
   }
   // 接続が切れた人（退出させた人も）は、自動でチェック/フォールドにする
   function left(id) {
@@ -291,7 +304,7 @@ function createRoom(o) {
 // o.local: { id, name, deliver(msg) } ホスト自身がこの場で遊ぶとき（ブラウザのホスト）。サーバーでは省略
 // o.onRoster(full): 参加者一覧が変わったとき（ホストの画面用。full には host の印も入る）
 // o.adminKey: 部屋を作った人の合言葉（サーバー用）。join でこれを送った人は、開始・退出をメッセージで操作できる
-// o.store, o.clock: createRoom と同じ
+// o.store, o.clock, o.onOver: createRoom と同じ
 function createHost(o) {
   const ck = o.clock || realClock,
     rid = () => Math.random().toString(36).slice(2, 7),
@@ -312,6 +325,7 @@ function createHost(o) {
     local: local && local.id,
     store: o.store,
     clock: ck,
+    onOver: o.onOver && ((g) => o.onOver(g, roster.slice())),
   });
   const tokOf = (id) => Object.keys(toks).find((k) => toks[k].id === id);
 

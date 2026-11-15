@@ -664,6 +664,25 @@ function* hand(g, T, log) {
   const d = shf([...Array(52).keys()]),
     bd = (T.bd = []);
   ps.forEach((p) => (p.h = [d.pop(), d.pop()]));
+  // ハンド履歴：g.hist（配列）があり、人間が配られているハンドだけ記録する。形は histText の上を参照
+  const H =
+    g.hist && ps.some((p) => p.hero)
+      ? {
+          n: (g.hn = (g.hn || 0) + 1),
+          at: Date.now(),
+          lv: g.lv + 1,
+          sb,
+          bb,
+          an,
+          tb: (T.no ||= g.tno = (g.tno || 0) + 1),
+          seats: ps.map((p) => ({ name: p.name, oid: p.oid, hero: p.hero ? 1 : 0, st: p.stack, h: p.h.slice() })),
+          acts: [],
+          bd: [],
+          sd: [],
+          win: [],
+        }
+      : null;
+  if (H) g.hist.push(H);
   const put = (p, x) => {
     x = Math.min(x, p.stack);
     p.stack -= x;
@@ -684,6 +703,7 @@ function* hand(g, T, log) {
   b0.lab += " BB";
   put(s0, sb);
   put(b0, bb);
+  if (H) ps.forEach((p, i) => (H.seats[i].pos = p.lab.trim()));
   let cur = Math.max(s0.bet, b0.bet),
     minR = bb;
   const live = () => ps.filter((p) => !p.fold);
@@ -736,6 +756,7 @@ function* hand(g, T, log) {
       // 自分の記録用：チェックしたあとにベットを受けたか、行動前のスタックの厚さ（M）
       const ckb = bd.length && p.ck == bd.length && !p.bet && c.toCall > 0,
         M0 = p.stack / (sb + bb + n * an);
+      const t0 = p.tot; // 履歴用：この行動で出した額を測る
       let act = "c",
         z = 0;
       const a = p.hero ? yield { k: "hero", p, c } : ai2(p, c);
@@ -782,6 +803,10 @@ function* hand(g, T, log) {
         lg(p.name + (k ? ` コール ${fb(k)}BB` : " チェック") + (p.allin ? " (オールイン)" : ""));
       }
       if (p.rec) track(p, c, act, z, { cto, ckb, M: M0 });
+      if (H) {
+        const x = p.tot - t0;
+        H.acts.push({ s: bd.length, i: ps.indexOf(p), a: act == "f" ? "f" : act == "r" ? (c.cur ? "r" : "b") : x ? "c" : "k", x, to: p.bet, ai: p.allin ? 1 : 0 });
+      }
       p.acted = 1;
       yield { k: "tick" };
     }
@@ -850,6 +875,7 @@ function* hand(g, T, log) {
           });
         }
     });
+  if (H && sd) H.sd = L.map((p) => ({ i: ps.indexOf(p), r: HN[(p.v / 1e10) | 0] }));
   let prev = 0;
   for (const m of [...new Set(L.map((p) => p.tot))].sort((a, b) => a - b)) {
     let pot = 0;
@@ -862,6 +888,14 @@ function* hand(g, T, log) {
     w.forEach((p) => (p.stack += sh));
     w[0].stack += pot - sh * w.length;
     lg(`▶ ${w.map((p) => p.name).join("・")} が ${fb(pot)}BB 獲得`);
+    if (H) H.win.push({ x: pot, w: w.map((p) => ps.indexOf(p)) });
+  }
+  if (H) {
+    H.bd = bd.slice();
+    ps.forEach((p, i) => {
+      H.seats[i].end = p.stack;
+      if (p.show) H.seats[i].shown = 1;
+    });
   }
   yield { k: "end" };
 }
@@ -903,6 +937,55 @@ function bal(g) {
     lo.p.push(hi.p.splice(i < 0 ? 0 : i, 1)[0]);
   }
   g.tables = T;
+}
+// ---- ハンド履歴 ----
+// 1ハンド = { n: 通し番号, at: 時刻(ms), lv: レベル, sb, bb, an: アンティ, tb: 卓の番号,
+//   seats: [{ name, oid, hero, pos: "D"/"SB"/"BB", st: 開始時のスタック, end: 終了時のスタック, h: 手札, shown: 公開されたか }]（ボタンから順）,
+//   acts: [{ s: その時のボードの枚数(0/3/4/5), i: 席の番号, a: "f"フォールド/"k"チェック/"c"コール/"b"ベット/"r"レイズ, x: 出した額, to: その時点のベット額, ai: オールイン }],
+//   bd: ボード, sd: [{ i, r: 役の名前 }]（ショーダウン）, win: [{ x: ポットの額, w: [勝った席の番号] }] }
+// 見せる相手に合わせて写しを作る。oid を渡すと「その人が配られたハンド」だけにし、その人の手札と公開された手札だけを残す
+function histView(hands, oid) {
+  return (hands || [])
+    .filter((H) => oid == null || H.seats.some((s) => s.oid == oid))
+    .map((H) => ({
+      ...H,
+      seats: H.seats.map((s) => ({ ...s, h: oid == null || s.oid == oid || s.shown ? s.h : null })),
+    }));
+}
+const cardText = (c) => RK[c % 13] + SU[(c / 13) | 0];
+// 読みやすいテキストにする（額は、そのハンドのBB単位）
+function histText(hands) {
+  const two = (x) => String(x).padStart(2, "0");
+  const ST = { 0: "プリフロップ", 3: "フロップ", 4: "ターン", 5: "リバー" },
+    A = { f: "フォールド", k: "チェック", c: "コール", b: "ベット", r: "レイズ" };
+  return hands
+    .map((H) => {
+      const f = (x) => +(x / H.bb).toFixed(1),
+        d = new Date(H.at),
+        cs = (h) => (h ? "[" + h.map(cardText).join(" ") + "]" : ""),
+        out = [
+          `#${H.n}  Lv${H.lv}（${H.sb}/${H.bb} ante ${H.an}）  卓${H.tb}  ${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`,
+        ];
+      H.seats.forEach((s) => out.push(`  ${(s.pos || "").padEnd(6)} ${s.name}  ${f(s.st)}BB ${cs(s.h)}`.trimEnd()));
+      let st = -1;
+      H.acts.forEach((a) => {
+        if (a.s != st) {
+          st = a.s;
+          out.push(`-- ${ST[st]}${st ? " " + cs(H.bd.slice(0, st)) : ""}`);
+        }
+        const s = H.seats[a.i];
+        out.push(`  ${s.name} ${A[a.a]}${a.a == "c" ? " " + f(a.x) + "BB" : a.a == "b" || a.a == "r" ? " " + f(a.to) + "BB" : ""}${a.ai ? "（オールイン）" : ""}`);
+      });
+      // 誰も行動しないまま進んだストリート（オールインのあと）もボードを出す
+      for (const k of [3, 4, 5]) if (H.bd.length >= k && k > st) out.push(`-- ${ST[k]} ${cs(H.bd.slice(0, k))}`);
+      if (H.sd.length) {
+        out.push("-- ショーダウン");
+        H.sd.forEach((x) => out.push(`  ${H.seats[x.i].name} ${cs(H.seats[x.i].h)}（${x.r}）`));
+      }
+      H.win.forEach((w) => out.push(`  ▶ ${w.w.map((i) => H.seats[i].name).join("・")} が ${f(w.x)}BB 獲得`));
+      return out.join("\n");
+    })
+    .join("\n\n");
 }
 // 時間が来ていればレベルを上げる
 function advanceLevel(g, now) {
@@ -1044,6 +1127,7 @@ const api = {
   R, SU, RK, LV, CPU0, TY, TYC, NM, NC, HN, REC_KEYS, BIGZ, MEMK, MEK, ME_DECAY, ME_PRIOR, ME_ROWS,
   fromType, shf, alive, itm, cd, e5, best, hcls, pre, draw, tier, track, newObs, obs, ai2,
   hand, bust, bal, advanceLevel, autoAct, playHand, soloSetup, loadMem, saveMem, meBlend, meStats,
+  histView, histText, cardText,
 };
 if (typeof module == "object" && module.exports) module.exports = api;
 else root.AlpEngine = api;
