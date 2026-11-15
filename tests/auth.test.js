@@ -245,6 +245,7 @@ test("戻り先は、このアプリの中だけ", async (t) => {
   for (const [next, want] of [
     ["https://evil.example/", "/account.html"],
     ["//evil.example/x", "/account.html"],
+    ["/.//evil.example/x", "/account.html"],
     ["./?r=alp-1", "/?r=alp-1"],
   ]) {
     const a = browser();
@@ -304,6 +305,17 @@ test("管理者だけが招待・役割の変更・ログアウトさせるを�
   // ログアウトさせる
   assert.equal((await (await admin.post("api/admin/logout", { id: croque.id })).json()).ended, 1);
   assert.equal(await m.me(), null);
+  // 止める：管理者は止められない。止めた人は入り直せず、解けば戻れる。おかしな id は受け付けない
+  assert.equal((await admin.post("api/admin/disable", { id: croque.id, on: true })).status, 400);
+  assert.equal((await admin.post("api/admin/role", { id: "__proto__", role: "admin" })).status, 400);
+  assert.equal({}.role, undefined);
+  const guest = (await (await admin.post("api/admin/users")).json()).users.find((u) => u.name == "Guest");
+  assert.equal((await admin.post("api/admin/disable", { id: guest.id, on: true })).status, 200);
+  assert.equal(await g.me(), null);
+  assert.equal((await g.login("google", G("g-5", "Guest"))).to, "/account.html?r=disabled");
+  assert.equal((await admin.post("api/admin/disable", { id: guest.id, on: false })).status, 200);
+  await g.login("google", G("g-5", "Guest"));
+  assert.equal((await g.me()).name, "Guest");
 });
 
 test("緊急ログインリンク：管理用の口で出し、1回だけ使える", async (t) => {
@@ -313,7 +325,13 @@ test("緊急ログインリンク：管理用の口で出し、1回だけ使え�
   assert.equal((await local("/login-link", { user: "nobody" })).why, "その人は見つかりません");
   const l = await local("/login-link", { user: "kaina" });
   const pc = browser();
-  const r = await pc.go(l.url);
+  // 開いただけ（リンクのプレビューなど）では使われない。確認のページでボタンを押すと入れる
+  const page = await pc.go(l.url);
+  assert.equal(page.status, 200);
+  assert.match(await page.text(), /<form method="post"/);
+  assert.equal(await pc.me(), null);
+  assert.equal((await pc.go(l.url, { method: "POST", headers: { origin: "https://evil.example" } })).status, 403);
+  const r = await pc.go(l.url, { method: "POST", headers: { origin: new URL(l.url).origin } });
   assert.equal(r.status, 302);
   assert.equal((await pc.me()).name, "Kaina");
   const again = browser();
@@ -350,4 +368,43 @@ test("アカウントは保存され、サーバーを立て直しても残る�
   const again = openAccounts(file);
   assert.equal(again.sessionUser(s.token).name, "Kaina");
   assert.ok(again.hasAdmin());
+});
+
+test("読めない Cookie や URL が来ても落ちない", async (t) => {
+  const { browser, base } = await boot(t);
+  const a = browser();
+  await a.login("discord", D("d-1", "Kaina"), { guilds: [GUILD] });
+  a.jar.other = "50%";
+  assert.equal((await a.me()).name, "Kaina");
+  // "//" は fetch では送れないので、生の HTTP で送る
+  const net = require("net"), u = new URL(base);
+  const status = await new Promise((resolve, reject) => {
+    const s = net.connect(+u.port, u.hostname, () => s.write("GET // HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"));
+    let b = "";
+    s.on("data", (c) => (b += c));
+    s.on("end", () => resolve(b.split(" ")[1]));
+    s.on("error", reject);
+  });
+  assert.equal(status, "400");
+  assert.equal((await a.me()).name, "Kaina");
+});
+
+test("連携：途中でログアウトしていたら、紐づけない", async (t) => {
+  const { browser, fp } = await boot(t);
+  const a = browser();
+  await a.login("discord", D("d-1", "Kaina"), { guilds: [GUILD] });
+  const s = await a.go("auth/google/start?intent=link");
+  await a.post("api/me/logout-all");
+  const ok = fp.approve(s.headers.get("location"), "google", G("g-1", "Kaina"));
+  assert.equal((await a.go(ok.url)).headers.get("location"), "/account.html?r=relogin");
+});
+
+test("accounts.json が壊れていたら、空で上書きせずに止まる", () => {
+  const os = require("os"), fs = require("fs"), path = require("path");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "alp-acc-"));
+  const file = path.join(dir, "accounts.json");
+  fs.writeFileSync(file, '{"users":{"u1":');
+  assert.throws(() => openAccounts(file), /読めません/);
+  assert.equal(fs.readFileSync(file, "utf8"), '{"users":{"u1":');
+  fs.rmSync(dir, { recursive: true, force: true });
 });

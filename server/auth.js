@@ -47,7 +47,15 @@ const parseCookies = (h) =>
       .split(";")
       .map((s) => s.trim().split("="))
       .filter(([k, v]) => k && v != null)
-      .map(([k, ...v]) => [k, decodeURIComponent(v.join("="))]),
+      .map(([k, ...v]) => {
+        // 読めない値（% の使い方が正しくないもの。同じドメインの別のアプリの Cookie など）は無視する
+        try {
+          return [k, decodeURIComponent(v.join("="))];
+        } catch (e) {
+          return null;
+        }
+      })
+      .filter(Boolean),
   );
 
 function createAuth(opt) {
@@ -89,11 +97,13 @@ function createAuth(opt) {
     u.searchParams.set("r", code);
     redirect(res, u.pathname + u.search, headers);
   };
-  const ip = (req) => (trustProxy && String(req.headers["x-forwarded-for"] || "").split(",")[0].trim()) || req.socket.remoteAddress || "";
+  // X-Forwarded-For は最後の値（すぐ前の中継が付けたもの）を使う。先頭は送り手が好きに書ける
+  const ip = (req) => (trustProxy && String(req.headers["x-forwarded-for"] || "").split(",").pop().trim()) || req.socket.remoteAddress || "";
   // 回数制限：接続元ごとに1分あたり limit 回まで
   const hits = new Map();
   const limited = (req, kind, limit) => {
     const k = kind + "|" + ip(req), t = now(), h = hits.get(k);
+    if (hits.size > 2000) for (const [x, v] of hits) if (t - v.t > 60e3) hits.delete(x); // 古い記録を捨てる
     if (!h || t - h.t > 60e3) return hits.set(k, { t, n: 1 }), false;
     return ++h.n > limit;
   };
@@ -126,7 +136,7 @@ function createAuth(opt) {
   const safeNext = (n) => {
     try {
       const u = new URL(n || "", pub);
-      if (u.origin === pub.origin && u.pathname.startsWith(pub.pathname)) return u.pathname + u.search;
+      if (u.origin === pub.origin && u.pathname.startsWith(pub.pathname) && !u.pathname.startsWith("//")) return u.pathname + u.search;
     } catch (e) {}
     return new URL("account.html", pub).pathname;
   };
@@ -196,7 +206,7 @@ function createAuth(opt) {
         q.set("code_challenge", b64u(crypto.createHash("sha256").update(verifier).digest()));
         q.set("code_challenge_method", "S256");
       }
-      if (P === prov.discord) q.set("prompt", "none"); // 一度許可していれば、確認画面を出さない
+      if (P === prov.discord && intent !== "link") q.set("prompt", "none"); // 一度許可していれば、確認画面を出さない（連携は毎回確かめる）
       return redirect(res, P.authorize + "?" + q, { "set-cookie": cookie("alp_oa", state, STATE_MS / 1000) }), true;
     }
     if ((m = p.match(/^\/auth\/(discord|google)\/callback$/)) && req.method === "GET") {
@@ -219,22 +229,36 @@ function createAuth(opt) {
       }
       const ident = { provider: m[1], sub: who.sub, name: who.name, avatar: who.avatar };
       if (st.intent === "link") {
+        // 始めたときと同じ人が、今もログインしているときだけ紐づける
+        const cur = userFromReq(req);
+        if (!cur || cur.id !== st.userId) return toAccount(res, "relogin", clear), true;
         const r = accounts.linkExternal(st.userId, ident);
-        if (r.error) return toAccount(res, /別の人/.test(r.error) ? "taken" : /1つまで/.test(r.error) ? "one" : "relogin", clear), true;
+        if (r.error) return toAccount(res, r.code || "relogin", clear), true;
         log("auth: link", m[1], st.userId);
         return toAccount(res, "linked", clear), true;
       }
       const r = accounts.loginExternal(ident, { invite: st.invite, autoJoin: who.member });
-      if (r.error) return toAccount(res, st.invite ? "badinvite" : P === prov.discord && guild ? "notmember" : "needinvite", clear), true;
+      if (r.error) return toAccount(res, r.code === "disabled" ? "disabled" : st.invite ? "badinvite" : P === prov.discord && guild ? "notmember" : "needinvite", clear), true;
       log("auth: login", m[1], r.user.id, r.user.name);
       return login(req, res, r.user.id, st.next), true;
     }
     // 緊急ログインリンク（管理用の口で出したもの。1回だけ使える）
-    if (p === "/auth/link" && req.method === "GET") {
+    // GET は確認のページを出すだけ。ボタンを押した POST で初めて使う（リンクのプレビューなどが先に開いても消費されない）
+    if (p === "/auth/link" && (req.method === "GET" || req.method === "POST")) {
+      if (req.method === "POST" && !sameOrigin(req)) return json(res, 403, { why: "このページからは操作できません" }), true;
       if (limited(req, "link", 20)) return json(res, 429, { why: "少し待ってからやり直してください" }), true;
       sweepPending();
-      const k = sha(url.searchParams.get("t") || ""), l = links.get(k);
-      if (!l || l.exp < now() || !accounts.getUser(l.userId)) return toAccount(res, "badlink"), true;
+      const t = url.searchParams.get("t") || "", k = sha(t), l = links.get(k), lu = l && accounts.getUser(l.userId);
+      if (!l || l.exp < now() || !lu || lu.disabled) return toAccount(res, "badlink"), true;
+      if (req.method === "GET") {
+        // Origin を付けて送るため、このページだけ referrer-policy を same-origin にする（no-referrer だと Origin が null になる）
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "same-origin", "x-frame-options": "DENY" });
+        res.end(
+          `<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ログイン</title>` +
+            `<form method="post" action="link?t=${encodeURIComponent(t)}"><p>緊急ログインリンクです。</p><button>ログインする</button></form></html>`,
+        );
+        return true;
+      }
       links.delete(k);
       log("auth: emergency login", l.userId);
       return login(req, res, l.userId, safeNext("account.html")), true;
@@ -264,6 +288,7 @@ function createAuth(opt) {
       return reply({ url: inviteUrl(iv.token), expiresAt: iv.expiresAt }), true;
     }
     if (p === "/api/admin/role") return reply(accounts.setRole(String(b.id || ""), b.role)), true;
+    if (p === "/api/admin/disable") return reply(b.id === me.id ? { error: "自分は止められません" } : accounts.setDisabled(String(b.id || ""), !!b.on)), true;
     if (p === "/api/admin/logout") return reply({ ended: accounts.endUserSessions(String(b.id || "")) }), true;
     return json(res, 404, { why: "not found" }), true;
   }
@@ -272,7 +297,12 @@ function createAuth(opt) {
   // ---- VPS の中からだけ届く管理用の口（npm run admin が使う） ----
   function startLocalAdmin(port) {
     const srv = http.createServer(async (req, res) => {
-      const u = new URL(req.url, "http://x");
+      let u;
+      try {
+        u = new URL(req.url, "http://x");
+      } catch (e) {
+        return json(res, 400, { why: "bad request" });
+      }
       if (req.method === "GET" && u.pathname === "/users") return json(res, 200, { users: accounts.listUsers() });
       if (req.method !== "POST") return json(res, 404, { why: "not found" });
       // ブラウザから（別のサイトに仕込まれて）呼ばれないよう、Origin 付きは断る

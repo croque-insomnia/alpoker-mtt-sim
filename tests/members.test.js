@@ -219,3 +219,14 @@ test("ログインしていない人は、これまでどおり合言葉とパ�
   assert.ok(r.adm);
   assert.equal((await as(null).create({ pw: "pw", key: "bad" })).status, 403);
 });
+
+test("止めたアカウントは、部屋に入るときもログインしていない扱いになる", async (t) => {
+  const { accounts, member, as } = await boot(t);
+  const kaina = member("Kaina"), croque = member("Croque");
+  const { room } = await as(kaina).create({ guests: false });
+  accounts.setDisabled(croque.user.id, true);
+  const C = as(croque).join(room);
+  await until(() => C.last("error"));
+  assert.match(C.last("error")[1], /メンバー専用/);
+  assert.equal((await as(croque).create({ guests: false })).status, 403, "部屋も作れない（合言葉が要る）");
+});

@@ -118,7 +118,14 @@ function startServer(opt = {}) {
     res.end(JSON.stringify(obj));
   };
   const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url, "http://x");
+    let url;
+    try {
+      url = new URL(req.url, "http://x");
+    } catch (e) {
+      // 読めない URL（"//" など）。ここで投げるとプロセスごと落ちる
+      res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+      return res.end("bad request");
+    }
     if (url.pathname === "/api/hello" && req.method === "GET")
       return json(res, 200, { server: 1, needKey: !!createKey, auth: auth.enabled() ? 1 : 0 });
     try {

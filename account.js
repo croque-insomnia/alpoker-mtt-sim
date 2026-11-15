@@ -13,6 +13,7 @@ const R = {
   taken: ["err", "その外部アカウントは、別の人に紐づいています"],
   one: ["err", "同じ種類のログイン方法は1つまでです。先に今のものを外してください"],
   relogin: ["err", "ログインし直してください"],
+  disabled: ["err", "このアカウントは止められています。管理者に確認してください"],
   badlink: ["err", "ログインリンクが使えません（使用済みか、期限切れ）"],
 };
 const qs = new URLSearchParams(location.search);
@@ -96,7 +97,7 @@ async function loadUsers() {
     ul.textContent = "";
     for (const x of users) {
       const li = document.createElement("li");
-      li.textContent = `${x.name}（${x.role === "admin" ? "管理者" : "メンバー"}・${x.identities.map((i) => P[i.provider] || i.provider).join("+")}・端末${x.sessions}）`;
+      li.textContent = `${x.name}（${x.role === "admin" ? "管理者" : "メンバー"}・${x.identities.map((i) => P[i.provider] || i.provider).join("+")}・端末${x.sessions}${x.disabled ? "・停止中" : ""}）`;
       const rb = document.createElement("button");
       rb.className = "g";
       rb.textContent = x.role === "admin" ? "メンバーにする" : "管理者にする";
@@ -105,7 +106,13 @@ async function loadUsers() {
       lb.className = "g";
       lb.textContent = "ログアウトさせる";
       lb.onclick = () => confirm(x.name + " をすべての端末からログアウトさせますか？") && post("api/admin/logout", { id: x.id }).then(load, (e) => note("err", e.message));
-      li.append(" ", rb, lb);
+      const db = document.createElement("button");
+      db.className = "g";
+      db.textContent = x.disabled ? "停止を解く" : "止める";
+      db.onclick = () =>
+        (x.disabled || confirm(x.name + " を止めますか？（ログアウトさせ、入り直せなくします）")) &&
+        post("api/admin/disable", { id: x.id, on: !x.disabled }).then(load, (e) => note("err", e.message));
+      li.append(" ", rb, lb, db);
       ul.appendChild(li);
     }
   } catch (e) {
