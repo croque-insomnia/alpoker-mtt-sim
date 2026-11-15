@@ -211,3 +211,26 @@ test("起動したとき、前のプロセスで遊んでいた大会（突然�
   assert.equal(db.prepare("SELECT closed FROM tournaments WHERE id = ?").get(solo).closed, 0, "ひとり用は別扱い（段階3b）");
   assert.ok(g.hist.length >= 3);
 });
+
+test("取り込み：DB に先に入っていた同じ大会（写しから戻した・ファイルとの結びつけに失敗した）は、二重にせず足りない分を足す", (t) => {
+  const dir = tmpdir(t), db = openDb(":memory:"), records = openRecords(db);
+  const seat = (oid, name, uid, h) => ({ name, oid, uid, hero: 1, pos: "D", st: 100, end: 100, h });
+  const H = (n, at) => ({ n, at, lv: 1, sb: 50, bb: 100, an: 0, tb: 1, seats: [seat("h0", "Kaina", "uK", [1, 2]), seat("h1", "Ben", "uB", [3, 4])], acts: [], bd: [], sd: [], win: [] });
+  const t0 = Date.parse("2026-11-03T10:00:00Z");
+  // 大会中に DB へ2ハンドまで書いたところで、写しから戻した（ファイルとは結びついていない）
+  const g = { P: [{ hero: 1, oid: "h0", uid: "uK", name: "Kaina", rec: [{}] }, { hero: 1, oid: "h1", uid: "uB", name: "Ben", rec: [{}] }], entries: 40, dur: 6e4 };
+  const tid = records.start(g, { source: "mp", room: "alp-same", at: t0 });
+  records.hand(tid, g, H(1, t0 + 1e3));
+  records.hand(tid, g, H(2, t0 + 2e3));
+  fs.writeFileSync(path.join(dir, "20261103-1200-alp-same.json"), JSON.stringify({
+    format: "alpoker-hands", version: 2, room: "alp-same", finishedAt: "2026-11-03T11:00:00Z", finished: true, entries: 40,
+    players: [{ uid: "uK", name: "Kaina", place: 1, re: 0, stats: {} }, { uid: "uB", name: "Ben", place: 2, re: 0, stats: {} }],
+    hands: [H(1, t0 + 1e3), H(2, t0 + 2e3), H(3, t0 + 3e3)],
+  }));
+  assert.equal(records.importDir(dir), 1);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM tournaments").get().n, 1, "大会は1つのまま");
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM hands").get().n, 3, "足りないハンドだけ足す");
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM hand_players WHERE uid = 'uK'").get().n, 3);
+  assert.deepEqual(db.prepare("SELECT finished, file FROM tournaments").get(), { finished: 1, file: "20261103-1200-alp-same.json" });
+  assert.equal(db.prepare("SELECT place FROM entries WHERE oid = 'h0'").get().place, 1);
+});

@@ -51,17 +51,6 @@ function startServer(opt = {}) {
     dbFile = env.DB_FILE || path.join(dataDir, "alpoker.db"),
     db = openDb(dbFile),
     records = openRecords(db);
-  // 振り返り・傾向の口（json は下で定義するので、呼ばれたときに引く）
-  const review = (req, res, url) => createReviewOnce()(req, res, url);
-  let reviewFn = null;
-  const createReviewOnce = () => (reviewFn ||= createReview({ auth, accounts, records, json, log }));
-  // ひとり用の記録の送信：アカウントごとに1分あたり60回まで
-  const soloHits = new Map();
-  const soloLimited = (uid) => {
-    const t = Date.now(), h = soloHits.get(uid);
-    if (!h || t - h.t > 60e3) return soloHits.set(uid, { t, n: 1 }), false;
-    return ++h.n > 60;
-  };
   // 記録の書き込みに失敗しても、ゲームは止めない
   const rec = (what, f) => {
     try {
@@ -168,6 +157,8 @@ function startServer(opt = {}) {
     res.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
     res.end(JSON.stringify(obj));
   };
+  // 振り返り・傾向の口
+  const review = createReview({ auth, accounts, records, json, log });
   const server = http.createServer(async (req, res) => {
     let url;
     try {
@@ -192,7 +183,7 @@ function startServer(opt = {}) {
     if (url.pathname === "/api/solo/sync" && req.method === "POST") {
       const u = auth.browserUser(req);
       if (!u) return json(res, 401, { why: "ログインしてください" });
-      if (soloLimited(u.id)) return json(res, 429, { why: "少し待ってから送ってください" });
+      if (auth.limit("solo|" + u.id, 60)) return json(res, 429, { why: "少し待ってから送ってください" });
       let body = "";
       req.on("data", (c) => {
         body += c;

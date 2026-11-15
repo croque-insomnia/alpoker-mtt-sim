@@ -161,3 +161,23 @@ test("身内CPUの材料：ひとり用のエクスポートと同じ形。合�
   // 他の人の材料も、使ってよいにしていなければ書き出せない
   assert.equal((await call(c, "api/style/profile?u=" + k.user.id)).status, 403);
 });
+
+test("他の人の傾向には、続いている大会を数えない（大会中に隠れている手札が漏れないように）。応答に部屋を作った人の ID を出さない", async (t) => {
+  const { accounts, records, member, call } = await boot(t);
+  const a = member("Aki"), b = member("Ben");
+  accounts.setShare(b.user.id, true);
+  const run = mp(records, a, b, 6); // 続いている大会
+  assert.ok(!run.g.over && run.g.hist.length >= 6);
+  // 自分の傾向には入る。他の人から見ると入らない
+  assert.ok((await call(b, "api/style")).body.all.counts.hands > 0);
+  const seen = (await call(a, "api/style?u=" + b.user.id)).body;
+  assert.equal(seen.all.counts.hands || 0, 0, "続いている大会は数えない");
+  const prof = (await call(a, "api/style/profile?u=" + b.user.id)).body;
+  assert.equal(prof.all.hands || 0, 0);
+  // 終われば数える
+  records.finish(run.tid, run.g, "closed");
+  assert.ok((await call(a, "api/style?u=" + b.user.id)).body.all.counts.hands > 0, "閉じた大会は数える");
+  // 振り返りの大会の行は、画面に要るものだけ
+  const h = (await call(a, "api/review/hands?t=" + run.tid)).body;
+  assert.deepEqual(Object.keys(h.tournament).sort(), ["blind_min", "closed", "entries", "finished", "finished_at", "id", "oid", "source", "started_at"]);
+});

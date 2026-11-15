@@ -22,8 +22,9 @@ function createReview({ auth, accounts, records, json, log }) {
     const s = +url.searchParams.get("since");
     return Number.isFinite(s) && s > 0 ? s : 0;
   };
-  const style = (uid, since) => {
-    const r = records.analyzeUser(uid, { since });
+  // 他の人を見るときは、続いているみんなで遊ぶ大会を数えない（大会中に隠れている手札の情報が、傾向の数の増え方から漏れるため）
+  const style = (uid, since, done) => {
+    const r = records.analyzeUser(uid, { since, done });
     const pack = (a) => ({ rows: analyzeRows(a.all), pos: a.pos, depth: a.depth, counts: a.all });
     return { all: pack(r.all), mp: pack(r.mp), solo: pack(r.solo), hands: r.hands };
   };
@@ -42,7 +43,10 @@ function createReview({ auth, accounts, records, json, log }) {
         if (!e) return json(res, 404, { why: "その大会は見られません（参加した大会だけ）" }), true;
         const running = e.t.source === "mp" && !e.t.finished && !e.t.closed;
         const hands = histView(records.handsIn(tid), running ? e.oid : null);
-        return json(res, 200, { tournament: { ...e.t, oid: e.oid }, running: running ? 1 : 0, hands }), true;
+        // 大会の行は、画面に要るものだけ返す（部屋を作った人のアカウント ID などは出さない）
+        const { id, source, started_at, finished_at, finished, closed, entries, blind_min } = e.t;
+        const tournament = { id, source, started_at, finished_at, finished, closed, entries, blind_min, oid: e.oid };
+        return json(res, 200, { tournament, running: running ? 1 : 0, hands }), true;
       }
       if (p === "/api/style/members") {
         const list = accounts.sharedUsers().filter((u) => u.id !== me.id);
@@ -51,12 +55,11 @@ function createReview({ auth, accounts, records, json, log }) {
       if (p === "/api/style" || p === "/api/style/profile") {
         const uid = url.searchParams.get("u") || me.id;
         if (!canSee(me, uid)) return json(res, 403, { why: "その人は、身内CPU化に使ってよいにしていません" }), true;
-        const u = accounts.getUser(uid), since = sinceOf(url);
-        if (p === "/api/style") return json(res, 200, { user: { id: uid, name: u ? u.name : "?" }, since, ...style(uid, since) }), true;
+        const u = accounts.getUser(uid), since = sinceOf(url), done = uid !== me.id;
+        if (p === "/api/style") return json(res, 200, { user: { id: uid, name: u ? u.name : "?" }, since, ...style(uid, since, done) }), true;
         // 身内CPUの材料：ひとり用の「あなたの傾向」のエクスポートと同じ形（all・recent・summary）に、位置別・深さ別を足す
         const src = ["mp", "solo"].includes(url.searchParams.get("src")) ? url.searchParams.get("src") : "all";
-        const pick = (r) => r[src];
-        const allTime = pick(records.analyzeUser(uid, {})), recent = pick(records.analyzeUser(uid, { since: Date.now() - 30 * DAY }));
+        const { all: allTime, recent } = records.profileOf(uid, { src, done, recentSince: Date.now() - 30 * DAY });
         const ts = records.tournamentsOf(uid).filter((t) => src === "all" || t.source === src);
         const body = {
           format: "alpoker-profile",
