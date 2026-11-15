@@ -1,6 +1,6 @@
 // net.js — 通信の層（ブラウザ用）。ゲームの中身は知らない。
 //
-// 「通信の口（link）」は次の2つを持つ。今は PeerJS 版（PeerLink）だけ。WebSocket 版も同じ形で作れば差し替えられる。
+// 「通信の口（link）」は次の2つを持つ。PeerJS 版（PeerLink）と、簡易サーバー用の WebSocket 版（wsLink）がある。
 //   listen(cb) … 部屋を開く側（ホストのブラウザ）。
 //       cb.ready(部屋ID) / cb.data(接続id, msg) / cb.closed(接続id) / cb.status(お知らせ文 or "") / cb.error(理由)
 //       戻り値: { send(接続id, msg), close(接続id), destroy() }
@@ -90,7 +90,45 @@ const PeerLink = {
   },
 };
 
-// 入室の手順。o: { name, pw, role, tok }（tok は復帰用の合言葉。なければ空）
+// 簡易サーバー（server/server.js）につなぐ link。部屋はサーバーが持つので dial だけ
+// base: サーバーの URL（例 "https://example.com/"）。WS: WebSocket の実装（ブラウザでは省略。Node のテストでは ws を渡す）
+function wsLink(base, WS) {
+  const Impl = WS || globalThis.WebSocket;
+  return {
+    dial(room, cb) {
+      const u = new URL("ws?room=" + encodeURIComponent(room), base);
+      u.protocol = u.protocol == "https:" ? "wss:" : "ws:";
+      const ws = new Impl(u.href);
+      let open = false, dead = false;
+      ws.onopen = () => {
+        open = true;
+        !dead && cb.open();
+      };
+      ws.onmessage = (e) => {
+        if (dead) return;
+        let m;
+        try {
+          m = JSON.parse(e.data);
+        } catch (err) {
+          return;
+        }
+        cb.data(m);
+      };
+      ws.onerror = () => !dead && !open && cb.error("サーバーに接続できません");
+      ws.onclose = () => !dead && (open ? cb.close() : cb.error("サーバーに接続できません"));
+      return {
+        send: (m) => ws.readyState === 1 && ws.send(JSON.stringify(m)),
+        close: () => ws.close(),
+        destroy: () => {
+          dead = true;
+          ws.close();
+        },
+      };
+    },
+  };
+}
+
+// 入室の手順。o: { name, pw, role, tok, adm }（adm は部屋を作った人の合言葉。サーバーで部屋を作ったときだけ）（tok は復帰用の合言葉。なければ空）
 // cb.joined(ok) / cb.roster(一覧) / cb.msg(msg) / cb.error(理由, fatal) / cb.closed(理由)
 //   fatal=1 は、入り直しても無駄な失敗（パスワード違い・退出させられた）
 // 戻り値: { send(msg), leave() }
@@ -116,7 +154,7 @@ function joinRoom(link, room, o, cb) {
     conn.destroy();
   }, JOIN_MS);
   const conn = link.dial(room, {
-    open: () => !dead && conn.send({ t: "join", name: o.name, pw: o.pw, role: o.role, tok: o.tok }),
+    open: () => !dead && conn.send({ t: "join", name: o.name, pw: o.pw, role: o.role, tok: o.tok, adm: o.adm }),
     data: (m) => {
       if (dead || !m || st == 2) return;
       if (m.t === "ok") {
@@ -166,4 +204,4 @@ const Net = (() => {
 })();
 
 // Node（テスト・将来のサーバー）から使うとき
-if (typeof module == "object" && module.exports) module.exports = { PeerLink, joinRoom, Net, JOIN_MS };
+if (typeof module == "object" && module.exports) module.exports = { PeerLink, wsLink, joinRoom, Net, JOIN_MS };
