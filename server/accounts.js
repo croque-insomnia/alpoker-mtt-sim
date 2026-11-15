@@ -173,6 +173,11 @@ function openAccounts(file, opt = {}) {
 
     // ---- 人 ----
     getUser: (id) => publicUser(userOf(id)),
+    // その表示名を使っているアカウントがあるか（ゲストには使わせない。止めているアカウントの名前も使わせない）
+    nameTaken: (name) => {
+      const n = cleanName(name).toLowerCase();
+      return !!n && Object.values(db.users).some((u) => u.name.toLowerCase() === n);
+    },
     listUsers: () =>
       Object.values(db.users)
         .sort((a, b) => a.createdAt - b.createdAt)

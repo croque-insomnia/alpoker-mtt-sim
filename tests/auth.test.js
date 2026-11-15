@@ -22,7 +22,9 @@ async function fakeProviders(t) {
       seen.push(u.pathname);
       if (u.pathname.endsWith("/token")) {
         const f = new URLSearchParams(b), who = people[f.get("code")];
-        if (!who || f.get("client_secret") !== who.provider + "-secret" || f.get("grant_type") !== "authorization_code") return send(400, { error: "invalid_grant" });
+        // 本物と同じく、秘密鍵が違えば 401 invalid_client、コードが違えば 400 invalid_grant
+        if (who && f.get("client_secret") !== who.provider + "-secret") return send(401, { error: "invalid_client", error_description: "The provided client secret is invalid." });
+        if (!who || f.get("grant_type") !== "authorization_code") return send(400, { error: "invalid_grant" });
         if (!String(f.get("redirect_uri")).endsWith(`/auth/${who.provider}/callback`)) return send(400, { error: "redirect" });
         if (who.provider === "google") {
           const ch = crypto.createHash("sha256").update(f.get("code_verifier") || "").digest("base64url");
@@ -407,4 +409,16 @@ test("accounts.json が壊れていたら、空で上書きせずに止まる", 
   assert.throws(() => openAccounts(file), /読めません/);
   assert.equal(fs.readFileSync(file, "utf8"), '{"users":{"u1":');
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("外部サービスに断られたときは、エラーの種類だけをログに出す（秘密鍵は出さない）", async (t) => {
+  const lines = [];
+  const { browser } = await boot(t, { GOOGLE_CLIENT_SECRET: "wrong-secret-value", log: (...a) => lines.push(a.join(" ")) });
+  const a = browser();
+  const r = await a.login("google", G("g-1", "Kaina"));
+  assert.equal(r.to, "/account.html?r=provider");
+  const hit = lines.find((l) => l.includes("外部サービスとのやりとりに失敗"));
+  assert.ok(hit && /google token 401 invalid_client/.test(hit), hit);
+  assert.ok(!lines.join("\n").includes("wrong-secret-value"), "秘密鍵はログに出さない");
+  assert.ok(!lines.join("\n").includes("The provided client secret"), "説明文も出さない");
 });

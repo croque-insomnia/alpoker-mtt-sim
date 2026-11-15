@@ -132,6 +132,9 @@ function createAuth(opt) {
     });
   const sid = (req) => parseCookies(req.headers.cookie).alp_sid || "";
   const userFromReq = (req) => accounts.sessionUser(sid(req));
+  // このサイトのページから来たときだけ、Cookie のセッションを使う（別のサイトに仕込まれた接続・送信は、ゲストとして扱う）
+  const browserSid = (req) => (sameOrigin(req) ? sid(req) : ""),
+    browserUser = (req) => accounts.sessionUser(browserSid(req));
   // 戻り先は、このアプリの中のページだけ（外のサイトへ飛ばす踏み台にさせない）
   const safeNext = (n) => {
     try {
@@ -152,16 +155,25 @@ function createAuth(opt) {
   };
 
   // ---- 外部サービスとのやりとり ----
+  // 外部サービスが返したエラーの種類（invalid_client など）だけを取り出す。説明文や秘密の値はログに出さない
+  const errCode = async (r) => {
+    try {
+      const j = await r.json(), e = j && (j.error || (j.code != null && "code " + j.code));
+      return typeof e == "string" && /^[\w .-]{1,40}$/.test(e) ? " " + e : "";
+    } catch (e) {
+      return "";
+    }
+  };
   async function exchange(P, code, verifier) {
     const body = new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: P.redirect, client_id: P.id, client_secret: P.secret });
     if (verifier) body.set("code_verifier", verifier);
     const r = await doFetch(P.token, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" }, body });
-    if (!r.ok) throw new Error("token " + r.status);
+    if (!r.ok) throw new Error("token " + r.status + (await errCode(r)));
     const t = await r.json();
     if (!t.access_token) throw new Error("no access_token");
     const get = async (u) => {
       const x = await doFetch(u, { headers: { authorization: "Bearer " + t.access_token, accept: "application/json" } });
-      if (!x.ok) throw new Error("api " + x.status);
+      if (!x.ok) throw new Error("api " + x.status + (await errCode(x)));
       return x.json();
     };
     const who = P.who(await get(P.me));
@@ -327,7 +339,7 @@ function createAuth(opt) {
     return new Promise((resolve) => srv.listen(port, "127.0.0.1", () => resolve(srv)));
   }
 
-  return { handle, userFromReq, startLocalAdmin, enabled: () => !!Object.keys(prov).length, providers: () => Object.keys(prov) };
+  return { handle, userFromReq, browserSid, browserUser, startLocalAdmin, enabled: () => !!Object.keys(prov).length, providers: () => Object.keys(prov) };
 }
 
 module.exports = { createAuth, parseCookies, PROVIDERS };

@@ -38,22 +38,31 @@ function startServer(opt = {}) {
     idleMs = opt.idleMs || IDLE_MS,
     dataDir = path.resolve(env.DATA_DIR || path.join(ROOT, "data")),
     store = opt.store || fileStore(path.join(dataDir, "store.json")),
-    log = opt.quiet ? () => {} : (...a) => console.log(new Date().toISOString(), ...a),
+    log = opt.log || (opt.quiet ? () => {} : (...a) => console.log(new Date().toISOString(), ...a)),
     accounts = opt.accounts || openAccounts(path.join(dataDir, "accounts.json")),
     auth = createAuth({ env, accounts, log, fetch: opt.fetch, providers: opt.providers });
   const rooms = new Map(); // 部屋ID -> { host, socks: Map(接続id -> ws), empty: 誰もいなくなった時刻 }
   const rid = () => "alp-" + crypto.randomBytes(4).toString("hex").slice(0, 6);
   const secret = () => crypto.randomBytes(12).toString("base64url");
 
-  function makeRoom(password) {
+  // 部屋を作る。o.ownerUid: 作った人のアカウント（ログインして作ったとき） / o.guests: ゲストも入れるか / o.password: ゲスト用のパスワード
+  // ログインせずに作ったとき（CREATE_KEY）は、作った人の合言葉（adm）を返す。その人が開始・退出を操作できる
+  function makeRoom(o) {
     let id;
     do id = rid();
     while (rooms.has(id));
-    const socks = new Map(), adm = secret();
+    const socks = new Map(), users = new Map(), adm = o.ownerUid ? null : secret();
     const host = createHost({
-      password,
+      password: o.password,
       roomId: id,
       adminKey: adm,
+      ownerUid: o.ownerUid,
+      guests: o.guests,
+      userOf: (cid) => {
+        const u = users.has(cid) && accounts.sessionUser(users.get(cid));
+        return u ? { id: u.id, name: u.name, role: u.role } : null;
+      },
+      reservedName: (n) => accounts.nameTaken(n),
       send: (cid, m) => {
         const ws = socks.get(cid);
         ws && ws.readyState === ws.OPEN && ws.send(JSON.stringify(m));
@@ -66,23 +75,24 @@ function startServer(opt = {}) {
       store,
       onOver: (g) => saveHands(id, g),
     });
-    rooms.set(id, { host, socks, empty: Date.now() });
-    log("room open", id, "rooms:", rooms.size);
-    return { room: id, adm };
+    rooms.set(id, { host, socks, users, empty: Date.now() });
+    log("room open", id, o.ownerUid ? "by " + o.ownerUid : "(key)", o.guests ? "guests ok" : "members only", "rooms:", rooms.size);
+    return adm ? { room: id, adm } : { room: id };
   }
   // 大会が終わったら（途中で部屋を閉じるときも）、ハンド履歴をファイルに残す（DATA_DIR/hands/日時-部屋ID.json）
   // 終了の直前でも書き終わるように、同期で書く
   function saveHands(id, g) {
     const d = new Date(),
       file = path.join(dataDir, "hands", `${fileStamp(d)}-${id}.json`),
+      // version 2：参加者とハンドの各席にアカウントの ID（uid。ゲストは null）、参加者に打ち方の記録（stats）を入れる
       body = {
         format: "alpoker-hands",
-        version: 1,
+        version: 2,
         room: id,
         finishedAt: d.toISOString(),
         finished: !!g.over, // false: 途中で部屋が閉じた
         entries: g.entries,
-        players: g.P.filter((p) => p.hero).map((p) => ({ name: p.name, place: p.place || 0, re: p.re })),
+        players: g.P.filter((p) => p.hero).map((p) => ({ uid: p.uid || null, name: p.name, place: p.place || 0, re: p.re, stats: (p.rec && p.rec[0]) || {} })),
         hands: g.hist,
       };
     try {
@@ -142,10 +152,20 @@ function startServer(opt = {}) {
           return json(res, 400, { why: "送信内容が読めません" });
         }
         const pw = typeof m.pw == "string" ? m.pw : "";
+        if (pw.length > 64) return json(res, 400, { why: "パスワードは64文字までにしてください" });
+        // ログインしている人（このサイトのページから）は、合言葉なしで作れる。ゲストを入れるときだけパスワードが要る
+        const u = auth.browserUser(req);
+        if (u) {
+          const guests = !!m.guests;
+          if (guests && !pw) return json(res, 400, { why: "ゲストも入れるときは、ゲスト用のパスワードを決めてください" });
+          if (rooms.size >= maxRooms) return json(res, 503, { why: "部屋がいっぱいです。しばらくしてから作ってください" });
+          return json(res, 200, makeRoom({ ownerUid: u.id, guests, password: guests ? pw : null }));
+        }
+        // ログインしていない人：これまでどおり、部屋を作る合言葉とパスワード
         if (createKey && m.key !== createKey) return json(res, 403, { why: "部屋を作る合言葉が違います" });
-        if (!pw || pw.length > 64) return json(res, 400, { why: "パスワードを入力してください（64文字まで）" });
+        if (!pw) return json(res, 400, { why: "パスワードを入力してください（64文字まで）" });
         if (rooms.size >= maxRooms) return json(res, 503, { why: "部屋がいっぱいです。しばらくしてから作ってください" });
-        json(res, 200, makeRoom(pw));
+        json(res, 200, makeRoom({ guests: true, password: pw }));
       });
       return;
     }
@@ -163,7 +183,8 @@ function startServer(opt = {}) {
       res.writeHead(200, {
         "content-type": TYPES[path.extname(f)],
         "cache-control": "no-cache",
-        "referrer-policy": "no-referrer",
+        // same-origin：外のサイトには参照元を送らない。no-referrer にすると、ブラウザによっては書き込み（POST）の Origin が null になり、本人確認が通らない
+        "referrer-policy": "same-origin",
         "x-content-type-options": "nosniff",
         "x-frame-options": "DENY",
       });
@@ -183,6 +204,10 @@ function startServer(opt = {}) {
       return ws.close();
     }
     r.socks.set(cid, ws);
+    // ログインしている人か。別のサイトのページからの接続は、Cookie が付いていてもゲストとして扱う（なりすまし防止）
+    // 覚えるのはセッションだけ。誰か・役割は使うたびに引き直す（止めた・ログアウトさせた・役割を変えた、がすぐ効くように）
+    const sid = auth.browserSid(req);
+    if (sid && accounts.sessionUser(sid)) r.users.set(cid, sid);
     ws.alive = true;
     ws.on("pong", () => (ws.alive = true));
     ws.on("message", (buf) => {
@@ -195,6 +220,7 @@ function startServer(opt = {}) {
       if (m && typeof m == "object") r.host.data(cid, m);
     });
     ws.on("close", () => {
+      r.users.delete(cid);
       if (r.socks.get(cid) !== ws) return; // こちらから閉じた接続
       r.socks.delete(cid);
       r.host.closed(cid);

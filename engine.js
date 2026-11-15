@@ -313,6 +313,8 @@ const REC_KEYS = {
   sO: "強い手で、自分から打てる場面（誰も打っていない）",
   sC: "そこでチェックした（スロープレイ）",
 };
+// 記録するか。離席中（p.away。みんなで遊ぶときの切断・時間切れ）と、自動の行動が混ざったハンド（p.auto）は、本人の打ち方ではないので数えない
+const recOf = (p) => (p.rec && !p.away && !p.auto ? p.rec : null);
 function track(p, c, t, z, x) {
   const inc = (k, v = 1) => p.rec.forEach((r) => (r[k] = (r[k] || 0) + v));
   if (!c.board.length) {
@@ -653,6 +655,7 @@ function* hand(g, T, log) {
     p.ag = {}; // フロップ以降のベット・レイズ { ボード枚数: { z: ポットに対する額, r: レイズか } }
     p.ck = 0; // 最後にチェックしたストリート（ボード枚数）
     p.hs = {}; // 自分の記録用：このハンドで数えたもの
+    p.auto = 0; // このハンドで、離席中の自動の行動（チェック/フォールド）があった
   });
   const A = T.p.filter((p) => p.stack > 0),
     n = A.length;
@@ -676,7 +679,7 @@ function* hand(g, T, log) {
           bb,
           an,
           tb: (g.tables || []).indexOf(T) + 1, // 画面の「卓 n」と同じ番号
-          seats: ps.map((p) => ({ name: p.name, oid: p.oid, hero: p.hero ? 1 : 0, st: p.stack, h: p.h.slice() })),
+          seats: ps.map((p) => ({ name: p.name, oid: p.oid, uid: p.uid || null, hero: p.hero ? 1 : 0, st: p.stack, h: p.h.slice() })),
           acts: [],
           bd: [],
           sd: [],
@@ -802,7 +805,8 @@ function* hand(g, T, log) {
         put(p, k);
         lg(p.name + (k ? ` コール ${fb(k)}BB` : " チェック") + (p.allin ? " (オールイン)" : ""));
       }
-      if (p.rec) track(p, c, act, z, { cto, ckb, M: M0 });
+      if (p.away) p.auto = 1;
+      if (recOf(p)) track(p, c, act, z, { cto, ckb, M: M0 });
       if (H) {
         const x = p.tot - t0;
         H.acts.push({ s: bd.length, i: ps.indexOf(p), a: act == "f" ? "f" : act == "r" ? (c.cur ? "r" : "b") : x ? "c" : "k", x, to: p.bet, ai: p.allin ? 1 : 0 });
@@ -815,7 +819,7 @@ function* hand(g, T, log) {
   reveal();
   // 自分の記録：ハンド数・参加・レイズ
   for (const q of ps)
-    if (q.rec)
+    if (recOf(q))
       q.rec.forEach((r) => {
         r.hands = (r.hands || 0) + 1;
         if (q.pc || q.pfr) r.vpip = (r.vpip || 0) + 1;
@@ -831,7 +835,7 @@ function* hand(g, T, log) {
   );
   for (const k of [3, 1, 1]) {
     if (live().length < 2) break;
-    if (k == 3) for (const q of live()) if (q.rec) q.rec.forEach((r) => (r.sf = (r.sf || 0) + 1));
+    if (k == 3) for (const q of live()) if (recOf(q)) q.rec.forEach((r) => (r.sf = (r.sf || 0) + 1));
     for (let j = 0; j < k; j++) bd.push(d.pop());
     ps.forEach((p) => {
       p.bet = 0;
@@ -849,7 +853,7 @@ function* hand(g, T, log) {
     L.forEach((p) => {
       p.v = best(p.h.concat(bd));
       p.show = 1;
-      if (p.rec) p.rec.forEach((r) => (r.sd = (r.sd || 0) + 1));
+      if (recOf(p)) p.rec.forEach((r) => (r.sd = (r.sd || 0) + 1));
       lg(`${p.name}：${p.h.map((c) => cd(c)).join("")}（${HN[(p.v / 1e10) | 0]}）`);
       // ベット・レイズしたストリートで実際に弱い手だったかを、見ていた人が記録する
       for (const st of [3, 4, 5])
@@ -946,12 +950,13 @@ function bal(g) {
 //   acts: [{ s: その時のボードの枚数(0/3/4/5), i: 席の番号, a: "f"フォールド/"k"チェック/"c"コール/"b"ベット/"r"レイズ, x: 出した額, to: その時点のベット額, ai: オールイン }],
 //   bd: ボード, sd: [{ i, r: 役の名前 }]（ショーダウン）, win: [{ x: ポットの額, w: [勝った席の番号] }] }
 // 見せる相手に合わせて写しを作る。oid を渡すと「その人が配られたハンド」だけにし、その人の手札と公開された手札だけを残す
+// アカウントの ID（uid）は、サーバーのファイルにだけ残し、写しには入れない
 function histView(hands, oid) {
   return (hands || [])
     .filter((H) => oid == null || H.seats.some((s) => s.oid == oid))
     .map((H) => ({
       ...H,
-      seats: H.seats.map((s) => ({ ...s, h: oid == null || s.oid == oid || s.shown ? s.h : null })),
+      seats: H.seats.map(({ uid, ...s }) => ({ ...s, h: oid == null || s.oid == oid || s.shown ? s.h : null })),
     }));
 }
 const cardText = (c) => RK[c % 13] + SU[(c / 13) | 0];

@@ -199,8 +199,9 @@ function mpRoster(r) {
   });
 }
 // 簡易サーバーでログインが使えるとき、最初の画面に「ログイン中：名前」かログインへのリンクを出す
+// ログインしていれば、入室・部屋作りの画面から名前とパスワードの欄をなくす（mpMember）
 function mpAccount() {
-  fetch("api/me", { cache: "no-store" })
+  return fetch("api/me", { cache: "no-store" })
     .then((r) => (r.ok ? r.json() : null))
     .then((me) => {
       if (!me || !me.enabled) return;
@@ -210,8 +211,23 @@ function mpAccount() {
       a.textContent = me.user ? "アカウント" : "ログイン（Discord / Google）";
       e.appendChild(a);
       e.hidden = false;
+      if (me.user) mpMember(me.user);
     })
     .catch(() => {});
+}
+function mpMember(u) {
+  MP.user = u;
+  // 入室：名前もパスワードも要らない
+  $("mjn").hidden = $("mjp").hidden = true;
+  $("mjb").textContent = u.name + " として入室";
+  // 部屋を作る：名前と合言葉は要らない。ゲストも入れるときだけ、ゲスト用のパスワードを決める
+  $("mhn").hidden = $("mhk").hidden = true;
+  $("mhg").parentNode.hidden = false;
+  const sync = () => ($("mhp").hidden = !$("mhg").checked);
+  $("mhg").onchange = sync;
+  sync();
+  $("mhp").placeholder = "ゲスト用のパスワード（ゲストに伝える）";
+  $("mhb").textContent = u.name + " として部屋を作る";
 }
 function mpUI() {
   const qs = new URLSearchParams(location.search),
@@ -219,7 +235,7 @@ function mpUI() {
     RM = qs.get("r"),
     err = (s) => ($("mpM").textContent = s || "");
   $("mp").innerHTML = `<h3 style="margin-top:0">みんなで遊ぶ</h3><div id="mpE">
-<div id="mpH" ${HM ? "" : "hidden"}><input id="mhn" type="text" maxlength="12" placeholder="プレイヤー名"><input id="mhp" type="password" placeholder="パスワード（参加者に伝える）"><input id="mhk" type="password" placeholder="部屋を作る合言葉" hidden><p>ブラインド間隔：<select id="mps"><option value="5">5分（標準）</option><option value="2">2分</option><option value="1">1分</option></select></p><button id="mhb">部屋を作る</button><p class="mu"><a href="?">入室する側はこちら</a></p></div>
+<div id="mpH" ${HM ? "" : "hidden"}><input id="mhn" type="text" maxlength="12" placeholder="プレイヤー名"><input id="mhp" type="password" placeholder="パスワード（参加者に伝える）"><input id="mhk" type="password" placeholder="部屋を作る合言葉" hidden><label hidden><input id="mhg" type="checkbox"> ゲスト（ログインしていない人）も入れる</label><p>ブラインド間隔：<select id="mps"><option value="5">5分（標準）</option><option value="2">2分</option><option value="1">1分</option></select></p><button id="mhb">部屋を作る</button><p class="mu"><a href="?">入室する側はこちら</a></p></div>
 <div id="mpJ" ${HM ? "hidden" : ""}><input id="mjr" type="text" placeholder="部屋ID（例: alp-xxxxx）"><input id="mjn" type="text" maxlength="12" placeholder="プレイヤー名"><input id="mjp" type="password" placeholder="パスワード"><label><input type="radio" name="mro" value="player" checked> プレイヤー</label> <label><input type="radio" name="mro" value="spec"> 観戦</label><br><button id="mjb">入室</button><p class="mu"><a href="?host">部屋を作る側はこちら</a></p></div>
 <p id="mpM" class="err"></p></div>
 <div id="mpRm" hidden><div id="mpI"></div><h4>参加者</h4><ul id="mpR" style="padding-left:20px"></ul><div id="mpC"></div><p id="mpS" class="ok"></p></div>
@@ -237,7 +253,7 @@ function mpUI() {
     if (!s) return;
     Net.use(wsLink(location.href));
     $("mhk").hidden = !s.needKey;
-    if (s.auth) mpAccount();
+    if (s.auth) MP.acct = mpAccount();
   });
   // 招待用の表示（部屋IDと招待URL）
   const invite = (id) => {
@@ -247,6 +263,12 @@ function mpUI() {
     $("mcp").onclick = () => navigator.clipboard && navigator.clipboard.writeText(url).then(() => ($("mcp").textContent = "コピーしました"));
   };
   $("mhb").onclick = async () => {
+    await MP.acct;
+    if (MP.user) {
+      if ($("mhg").checked && !$("mhp").value) return err("ゲスト用のパスワードを決めてください");
+      err("部屋を作成中…");
+      return createOnServer(MP.user.name, $("mhg").checked ? $("mhp").value : "", $("mhg").checked);
+    }
     const n = $("mhn").value.trim(), p = $("mhp").value;
     if (!n || !p) return err("名前とパスワードを入力してください");
     err("部屋を作成中…");
@@ -276,13 +298,13 @@ function mpUI() {
     });
   };
   // 簡易サーバーに部屋を作ってもらい、作った人として入室する
-  const createOnServer = async (n, p) => {
+  const createOnServer = async (n, p, guests) => {
     let r;
     try {
       const res = await fetch("api/rooms", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ pw: p, key: $("mhk").value }),
+        body: JSON.stringify({ pw: p, key: $("mhk").value, guests: !!guests }),
       });
       r = await res.json();
       if (!res.ok) return err(r.why || "部屋を作れませんでした");
@@ -367,9 +389,11 @@ function mpUI() {
     clearTimeout(MP.rtT);
     MP.rtT = setTimeout(connect, 1000 * Math.min(2 * MP.retry, 6));
   };
-  $("mjb").onclick = () => {
-    const id = $("mjr").value.trim(), n = $("mjn").value.trim(), p = $("mjp").value;
-    if (!id || !n || !p) return err("すべて入力してください");
+  $("mjb").onclick = async () => {
+    await MP.acct;
+    const id = $("mjr").value.trim(), n = MP.user ? MP.user.name : $("mjn").value.trim(), p = MP.user ? "" : $("mjp").value;
+    if (!id) return err("部屋IDを入力してください");
+    if (!n || (!p && !MP.user)) return err("すべて入力してください");
     err("接続中…");
     MP.jp = { id, n, p, role: document.querySelector("input[name=mro]:checked").value };
     MP.retry = 0;

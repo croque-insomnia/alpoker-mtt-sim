@@ -5,7 +5,8 @@ const { createRoom, ACT_MS } = require("../room.js");
 const { fakeClock } = require("./helpers.js");
 
 // 人間 nh 人＋観戦1人で大会を開き、人間役はランダムに打つ（放置・切断・戻るも混ぜる）
-function play(nh, { afk = 0.05, leave = 0, back = 0.3, seed = 1 } = {}) {
+// drop: 最初のハンドのあとで必ず切断させる人（偶然に頼らず、切断の場面を必ず通すため）
+function play(nh, { afk = 0.05, leave = 0, back = 0.3, seed = 1, drop = [] } = {}) {
   let s = seed * 2654435761 % 4294967296;
   const rnd = () => (s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296;
   const clock = fakeClock();
@@ -15,7 +16,17 @@ function play(nh, { afk = 0.05, leave = 0, back = 0.3, seed = 1 } = {}) {
   const room = createRoom({
     deliver: (id, m) => {
       msgs++;
-      if (m.t == "view") last[id] = { v: m.v, fresh: 1 };
+      if (m.t != "view") return;
+      last[id] = { v: m.v, fresh: 1 };
+      // 手札の漏れ：自分以外の、公開されていない手札が view に入っていないか。
+      // 送った瞬間の状態と照らし合わせる（あとで照らすと、卓の並べ替えなどで席の順がずれて、漏れと見誤る）
+      const g0 = room.state(), me = g0.P.find((p) => p.pid == id), T = g0.tables[m.v.ti];
+      if (T)
+        m.v.pl.forEach((p, i) => {
+          const real = T.p.concat(T.gone || [])[i];
+          if (real && p.name != real.name) problems.push("seat order " + id);
+          if (p.h && real && real != me && !real.show) problems.push("leak " + real.name);
+        });
     },
     members: () => ids.filter((i) => !gone.has(i)),
     clock,
@@ -24,16 +35,11 @@ function play(nh, { afk = 0.05, leave = 0, back = 0.3, seed = 1 } = {}) {
   const g = room.state();
   let wasWait = 0, rounds = 0, timeouts = 0, backs = 0;
   const check = () => {
-    // 手札の漏れ：自分以外の、公開されていない手札が view に入っていないか
     for (const id of ids) {
       const L = last[id];
       if (!L || !L.fresh) continue;
       L.fresh = 0;
-      const v = L.v, me = g.P.find((p) => p.pid == id), T = g.tables[v.ti];
-      if (T) v.pl.forEach((p, i) => {
-        const real = T.p.concat(T.gone || [])[i];
-        if (p.h && real && real != me && !real.show) problems.push("leak " + real.name);
-      });
+      const v = L.v;
       if (gone.has(id)) continue;
       if (v.req) {
         if (rnd() < afk) { timeouts++; continue; } // 放置
@@ -47,6 +53,11 @@ function play(nh, { afk = 0.05, leave = 0, back = 0.3, seed = 1 } = {}) {
     }
     if (g.wait && !wasWait) {
       rounds++;
+      if (rounds == 1)
+        for (const id of drop) {
+          gone.add(id);
+          room.left(id);
+        }
       // チップの合計は「エントリー数 × 開始スタック」のまま
       const tot = g.P.reduce((a, p) => a + (p.alive ? p.stack : 0), 0);
       if (tot != g.entries * 1e4) problems.push(`chips ${tot} != ${g.entries * 1e4} (round ${rounds})`);
@@ -75,9 +86,10 @@ for (const nh of [1, 3, 8, 20, 40]) {
 }
 
 test("切断する人がいても進む", () => {
-  const r = play(8, { seed: 7, leave: 0.002 });
+  const r = play(8, { seed: 7, leave: 0.002, drop: ["p1", "p2"] });
   assert.deepEqual(r.problems, []);
-  assert.ok(r.gone.size > 0);
+  assert.ok(r.gone.has("p1") && r.gone.has("p2"));
+  assert.ok(r.g.over || !r.g.P.some((p) => p.hero && p.alive && !r.gone.has(p.pid)), "最後まで進む");
 });
 
 test("時間切れで離席扱いになり、戻るで解ける", () => {
@@ -134,8 +146,9 @@ test("ハンド履歴：大会中は自分のハンドだけ、終わったら�
   });
   room.start([{ id: "a", name: "A" }, { id: "b", name: "B" }], 1);
   const g = room.state();
+  // 人間は、打たれたら降り、打たれなければチェックする（何でもコールすると、数ハンドで2人ともバストして大会が終わることがある）
   const act = () => {
-    for (const id of ["a", "b"]) if (last[id] && last[id].req) room.msg(id, { t: "act", a: { t: "c" } });
+    for (const id of ["a", "b"]) if (last[id] && last[id].req) room.msg(id, { t: "act", a: { t: last[id].req.toCall ? "f" : "c" } });
   };
   // 数ハンド進めて、大会中の履歴を頼む
   while (g.hist.length < 3 && !g.over) {
@@ -172,4 +185,18 @@ test("大会が終わったら onOver が呼ばれる", () => {
   room.start([{ id: "a", name: "A" }], 1);
   clock.run(1e6, () => last.a && last.a.req && room.msg("a", { t: "act", a: { t: "c" } }));
   assert.ok(over && over.over && over.hist.length > 0);
+});
+
+test("打ち方の記録：離席中の自動の行動は数えない", () => {
+  const clock = fakeClock();
+  const last = {};
+  const room = createRoom({ deliver: (id, m) => m.t == "view" && (last[id] = m.v), members: () => ["a", "b"], clock });
+  room.start([{ id: "a", name: "A" }, { id: "b", name: "B" }], 1);
+  const g = room.state();
+  room.left("b"); // b は最初から離席（全部、自動のチェック/フォールド）
+  clock.run(1e6, () => last.a && last.a.req && room.msg("a", { t: "act", a: { t: "c" } }));
+  const [a, b] = ["a", "b"].map((id) => g.P.find((p) => p.name == id.toUpperCase()));
+  assert.ok(a.rec[0].hands > 0, "席にいた人は数える");
+  assert.equal(b.rec[0].hands || 0, 0, "離席中のハンドは数えない");
+  assert.ok(g.hist.every((H) => H.seats.every((s) => s.uid === null)), "アカウントでない席の uid は null");
 });
