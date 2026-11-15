@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="referrer" content="same-origin" />
+    <title>振り返り</title>
+    <link rel="stylesheet" href="style.css" />
+    <style>
+      .tabs button.on { outline: 2px solid currentColor; }
+      table.rv { border-collapse: collapse; width: 100%; font-size: 13px; }
+      table.rv td, table.rv th { padding: 4px 6px; border-bottom: 1px solid var(--bd); text-align: left; }
+      table.rv tr.pick { cursor: pointer; }
+      table.rv tr.pick:hover { background: rgba(127, 127, 127, 0.12); }
+      .wrap { overflow-x: auto; }
+      pre.hx { white-space: pre-wrap; font-size: 13px; }
+      .flt label { margin-right: 10px; font-size: 13px; white-space: nowrap; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div class="pn">
+        <h2 style="margin-top: 0">振り返り</h2>
+        <p id="msg" hidden></p>
+        <p class="tabs"><button id="t1" class="on">大会とハンド</button> <button id="t2" class="g">打ち方の傾向</button></p>
+        <p><a href="./">ゲームに戻る</a>　<a href="account.html">アカウント</a></p>
+      </div>
+      <!-- 大会とハンド -->
+      <div id="p1">
+        <div class="pn">
+          <h3 style="margin-top: 0">参加した大会</h3>
+          <div class="wrap"><table class="rv" id="ts"></table></div>
+        </div>
+        <div class="pn" id="hp" hidden>
+          <h3 style="margin-top: 0" id="ht"></h3>
+          <p class="mu" id="hn"></p>
+          <p class="flt">
+            <label><input type="checkbox" id="fsd" /> ショーダウン</label>
+            <label><input type="checkbox" id="fai" /> 自分がオールイン</label>
+            <label><input type="checkbox" id="fbig" /> 大きなポット（20BB以上）</label>
+            <label><input type="checkbox" id="fvp" /> 自分から参加</label>
+            <label>位置 <select id="fpos"><option value="">すべて</option><option>D</option><option>SB</option><option>BB</option><option>UTG</option><option>CO</option></select></label>
+          </p>
+          <p>
+            <span id="hc"></span>　保存：<button class="g" id="sx">テキスト</button><button class="g" id="sj">JSON</button>
+          </p>
+          <div class="wrap"><table class="rv" id="hs"></table></div>
+          <pre class="hx" id="h1" hidden></pre>
+        </div>
+      </div>
+      <!-- 打ち方の傾向 -->
+      <div id="p2" hidden>
+        <div class="pn">
+          <p>
+            <label>だれ <select id="who"></select></label>
+            <label>期間 <select id="per"><option value="0">全期間</option><option value="30">直近30日</option><option value="90">直近90日</option></select></label>
+          </p>
+          <p>
+            <label><input type="radio" name="src" value="all" checked /> 合算</label>
+            <label><input type="radio" name="src" value="mp" /> 対人（みんなで遊ぶ）</label>
+            <label><input type="radio" name="src" value="solo" /> 対CPU（ひとり用）</label>
+          </p>
+          <p class="mu" id="sh"></p>
+          <div class="wrap"><table class="rv" id="rows"></table></div>
+          <h4>位置別</h4>
+          <div class="wrap"><table class="rv" id="pos"></table></div>
+          <h4>スタックの深さ別（配られたときの M）</h4>
+          <div class="wrap"><table class="rv" id="dep"></table></div>
+          <p><button id="ex">身内CPUの材料を書き出す（JSON）</button></p>
+          <p id="shr" hidden>
+            <label><input type="checkbox" id="shc" /> 身内CPU化に使ってよい（他のメンバーが、わたしの傾向を見て、材料を書き出せる）</label>
+          </p>
+        </div>
+      </div>
+    </div>
+    <script src="engine.js"></script>
+    <script src="review.js"></script>
+  </body>
+</html>

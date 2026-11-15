@@ -69,11 +69,11 @@ async function boot(t, extra = {}) {
   const fp = await fakeProviders(t);
   const accounts = openAccounts();
   // PUBLIC_URL は実際の待ち受けポートが決まってから作るので、いったん仮で立ててから立て直す
-  const tmp = await startServer({ PORT: 0, HOST: "127.0.0.1", quiet: 1, accounts, store: { get: () => null, set() {} } });
+  const tmp = await startServer({ PORT: 0, HOST: "127.0.0.1", quiet: 1, DB_FILE: ":memory:", accounts, store: { get: () => null, set() {} } });
   const port = tmp.port;
   await tmp.close();
   const srv = await startServer({
-    PORT: port, HOST: "127.0.0.1", quiet: 1, accounts, store: { get: () => null, set() {} },
+    PORT: port, HOST: "127.0.0.1", quiet: 1, DB_FILE: ":memory:", accounts, store: { get: () => null, set() {} },
     PUBLIC_URL: `http://127.0.0.1:${port}/`, ADMIN_PORT: "auto",
     DISCORD_CLIENT_ID: "d-id", DISCORD_CLIENT_SECRET: "discord-secret", DISCORD_GUILD_ID: GUILD,
     GOOGLE_CLIENT_ID: "g-id", GOOGLE_CLIENT_SECRET: "google-secret",
@@ -121,7 +121,7 @@ const D = (id, name) => ({ id, username: name.toLowerCase(), global_name: name, 
 const G = (sub, name) => ({ sub, name, picture: "https://example.com/p.png" });
 
 test("ログインの設定がなければ、ログインは無効のまま", async (t) => {
-  const srv = await startServer({ PORT: 0, HOST: "127.0.0.1", quiet: 1, accounts: openAccounts(), store: { get: () => null, set() {} } });
+  const srv = await startServer({ PORT: 0, HOST: "127.0.0.1", quiet: 1, DB_FILE: ":memory:", accounts: openAccounts(), store: { get: () => null, set() {} } });
   t.after(() => srv.close());
   const me = await fetch(`http://127.0.0.1:${srv.port}/api/me`).then((r) => r.json());
   assert.deepEqual(me, { enabled: false, providers: {}, guild: false, user: null });

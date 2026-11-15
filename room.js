@@ -27,6 +27,9 @@ const memStore = () => {
 // o.store: ネームドCPUの記憶の保存先 { get, set }（省略するとその場限り）
 // o.clock: { now, setTimeout, clearTimeout }（テストで時間を早送りするため。省略すると本物の時計）
 // o.onOver(g): 大会が終わったとき（サーバーでハンド履歴をファイルに残すのに使う）
+// 記録用（サーバーで DB に書くのに使う。どれも省略できる）
+// o.onStart(g): 大会が始まったとき / o.onHand(g, H): ハンドが1つ終わって g.hist に入ったとき
+// o.onRound(g): ラウンドの処理（バスト・順位・リエントリー）が済んだとき
 function createRoom(o) {
   const ck0 = o.clock || realClock,
     // stop() のあとは、残っているタイマーが来ても何もしない（サーバーで部屋を片付けるとき用）
@@ -76,8 +79,15 @@ function createRoom(o) {
     });
     g.tables = tb;
     each((id) => o.deliver(id, { t: "start" }));
+    o.onStart && o.onStart(g);
     round();
     return true;
+  }
+  // 終わったハンドを、記録の係（onHand）へ1件ずつ渡す
+  let handed = 0;
+  function flush() {
+    if (!o.onHand) return;
+    while (handed < g.hist.length) o.onHand(g, g.hist[handed++]);
   }
   function round() {
     g.wait = 0;
@@ -91,6 +101,7 @@ function createRoom(o) {
       else {
         playHand(g, t, tlog(t)); // 操作する人間のいない卓は即座に1ハンド進める
         bust(g, t);
+        flush();
       }
     });
     open = live.length;
@@ -128,6 +139,7 @@ function createRoom(o) {
       r = t.g.next();
     }
     bust(g, t);
+    flush();
     t.req = null;
     t.g = null;
     push();
@@ -179,6 +191,8 @@ function createRoom(o) {
   }
   function next() {
     bal(g);
+    flush();
+    o.onRound && o.onRound(g);
     if (alive(g) <= 1 || !g.P.some((p) => p.hero && p.alive)) {
       g.over = 1;
       const w = g.P.find((p) => p.alive);
@@ -315,7 +329,7 @@ function createRoom(o) {
 // o.ownerUid: 部屋を作った人のアカウント ID。その人と、サイトの管理者（role "admin"）は開始・退出を操作できる
 // o.guests: false ならゲスト（アカウントなし）は入れない（既定は入れる）
 // o.reservedName(name): その名前がアカウントの表示名と重なるか（ゲストには使わせない）
-// o.store, o.clock, o.onOver: createRoom と同じ
+// o.store, o.clock, o.onOver, o.onStart, o.onHand, o.onRound: createRoom と同じ
 function createHost(o) {
   const ck = o.clock || realClock,
     rid = () => Math.random().toString(36).slice(2, 7),
@@ -338,6 +352,9 @@ function createHost(o) {
     store: o.store,
     clock: ck,
     onOver: o.onOver && ((g) => o.onOver(g, roster.slice())),
+    onStart: o.onStart,
+    onHand: o.onHand,
+    onRound: o.onRound,
   });
   const tokOf = (id) => Object.keys(toks).find((k) => toks[k].id === id);
 

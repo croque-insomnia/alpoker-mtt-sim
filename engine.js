@@ -656,7 +656,13 @@ function* hand(g, T, log) {
     p.ck = 0; // 最後にチェックしたストリート（ボード枚数）
     p.hs = {}; // 自分の記録用：このハンドで数えたもの
     p.auto = 0; // このハンドで、離席中の自動の行動（チェック/フォールド）があった
+    p.nr = 0; // このハンドのどこかで離席中だった（履歴に「本人の打ち方ではない」と残す）
   });
+  // 記録するか（recOf）を見るついでに、離席中だったことを覚えておく
+  const rOf = (p) => {
+    if (p.away) p.nr = 1;
+    return recOf(p);
+  };
   const A = T.p.filter((p) => p.stack > 0),
     n = A.length;
   if (n < 2) return;
@@ -806,7 +812,7 @@ function* hand(g, T, log) {
         lg(p.name + (k ? ` コール ${fb(k)}BB` : " チェック") + (p.allin ? " (オールイン)" : ""));
       }
       if (p.away) p.auto = 1;
-      if (recOf(p)) track(p, c, act, z, { cto, ckb, M: M0 });
+      if (rOf(p)) track(p, c, act, z, { cto, ckb, M: M0 });
       if (H) {
         const x = p.tot - t0;
         H.acts.push({ s: bd.length, i: ps.indexOf(p), a: act == "f" ? "f" : act == "r" ? (c.cur ? "r" : "b") : x ? "c" : "k", x, to: p.bet, ai: p.allin ? 1 : 0 });
@@ -819,7 +825,7 @@ function* hand(g, T, log) {
   reveal();
   // 自分の記録：ハンド数・参加・レイズ
   for (const q of ps)
-    if (recOf(q))
+    if (rOf(q))
       q.rec.forEach((r) => {
         r.hands = (r.hands || 0) + 1;
         if (q.pc || q.pfr) r.vpip = (r.vpip || 0) + 1;
@@ -835,7 +841,7 @@ function* hand(g, T, log) {
   );
   for (const k of [3, 1, 1]) {
     if (live().length < 2) break;
-    if (k == 3) for (const q of live()) if (recOf(q)) q.rec.forEach((r) => (r.sf = (r.sf || 0) + 1));
+    if (k == 3) for (const q of live()) if (rOf(q)) q.rec.forEach((r) => (r.sf = (r.sf || 0) + 1));
     for (let j = 0; j < k; j++) bd.push(d.pop());
     ps.forEach((p) => {
       p.bet = 0;
@@ -853,7 +859,7 @@ function* hand(g, T, log) {
     L.forEach((p) => {
       p.v = best(p.h.concat(bd));
       p.show = 1;
-      if (recOf(p)) p.rec.forEach((r) => (r.sd = (r.sd || 0) + 1));
+      if (rOf(p)) p.rec.forEach((r) => (r.sd = (r.sd || 0) + 1));
       lg(`${p.name}：${p.h.map((c) => cd(c)).join("")}（${HN[(p.v / 1e10) | 0]}）`);
       // ベット・レイズしたストリートで実際に弱い手だったかを、見ていた人が記録する
       for (const st of [3, 4, 5])
@@ -899,6 +905,8 @@ function* hand(g, T, log) {
     ps.forEach((p, i) => {
       H.seats[i].end = p.stack;
       if (p.show) H.seats[i].shown = 1;
+      // 離席中の自動の行動が混ざった席：本人の打ち方ではないので、傾向の計算（analyze）では数えない
+      if (p.auto || p.nr || p.away) H.seats[i].auto = 1;
     });
     H.n = g.hist.length + 1;
     g.hist.push(H);
@@ -995,6 +1003,150 @@ function histText(hands) {
       return out.join("\n");
     })
     .join("\n\n");
+}
+// ---- 分析器：ハンド履歴から、打ち方の傾向を数え直す ----
+// track（遊んでいる最中に数える）と同じ数え方を、ハンド履歴だけから行う。履歴さえあれば、数え方を増やしても過去にさかのぼれる
+// pick(seat): 数える席を選ぶ（例：(s) => s.uid === "u..."、(s) => s.oid === "hero"）
+// 戻り値: { all: REC_KEYS と同じ項目の合計, pos: { D/SB/BB/UTG/CO: { hands, vpip, pfr } }, depth: { short/mid/deep: { hands, vpip, pfr } } }
+//   pos はボタンからの位置（5人卓。少ない卓では後ろから詰める）、depth は配られたときの M（10以下・20以下・それより上）
+// 離席中の自動の行動が混ざった席（seat.auto）は、そのハンドごと数えない
+const POS5 = ["D", "SB", "BB", "UTG", "CO"];
+function posName(i, n) {
+  if (n == 2) return i == 0 ? "SB" : "BB"; // ヘッズアップ：ボタンが SB
+  if (i < 3) return POS5[i];
+  return POS5[5 - (n - i)]; // 後ろの席から CO, UTG
+}
+function analyze(hands, pick) {
+  const all = {}, pos = {}, depth = {};
+  const add = (o, k, v = 1) => (o[k] = (o[k] || 0) + v);
+  for (const H of hands || []) {
+    const seats = H.seats || [], n = seats.length;
+    if (n < 2) continue;
+    const mine = seats.map((s) => !!(!s.auto && s.h && pick(s)));
+    if (!mine.some(Boolean)) continue;
+    const { sb, bb, an } = H,
+      unit = sb + bb + n * an,
+      P = seats.map((s) => ({ h: s.h, stack: s.st, tot: 0, bet: 0, fold: 0, allin: 0, acted: 0, ck: 0, pc: 0, pfr: 0, hs: {} }));
+    const put = (p, x) => {
+      x = Math.min(x, p.stack);
+      p.stack -= x;
+      p.bet += x;
+      p.tot += x;
+      if (!p.stack) p.allin = 1;
+    };
+    P.forEach((p) => {
+      const x = Math.min(an, p.stack);
+      p.stack -= x;
+      p.tot += x;
+      if (!p.stack) p.allin = 1;
+    });
+    const s0 = n == 2 ? P[0] : P[1], b0 = n == 2 ? P[1] : P[2];
+    put(s0, sb);
+    put(b0, bb);
+    // 配られたときの M（アンティ・ブラインドを出す前のスタックで）
+    const M = seats.map((s) => s.st / unit);
+    let cur = Math.max(s0.bet, b0.bet), street = 0, pre = false;
+    // プリフロップが済んだ：ハンド数・参加・レイズ（位置別・深さ別も）
+    const afterPre = () => {
+      if (pre) return;
+      pre = true;
+      P.forEach((p, i) => {
+        if (!mine[i]) return;
+        const v = p.pc || p.pfr ? 1 : 0, ps = (pos[posName(i, n)] ||= {}), dp = (depth[M[i] <= 10 ? "short" : M[i] <= 20 ? "mid" : "deep"] ||= {});
+        for (const o of [all, ps, dp]) {
+          add(o, "hands");
+          if (v) add(o, "vpip");
+          if (p.pfr) add(o, "pfr");
+        }
+      });
+    };
+    for (const a of H.acts || []) {
+      if (a.s != street) {
+        afterPre();
+        street = a.s;
+        P.forEach((p) => ((p.bet = 0), (p.acted = 0)));
+        cur = 0;
+      }
+      const i = a.i, p = P[i];
+      if (!p) break;
+      const B = (H.bd || []).slice(0, a.s),
+        toCall = cur - p.bet,
+        pot = P.reduce((x, q) => x + q.tot, 0),
+        cto = a.s && !toCall && P.some((q, j) => j != i && !q.fold && q.acted),
+        ckb = a.s && p.ck == a.s && !p.bet && toCall > 0,
+        M0 = p.stack / unit,
+        t = a.a == "f" ? "f" : a.a == "r" || a.a == "b" ? "r" : "c",
+        z = t == "r" ? a.x / (pot || 1) : 0,
+        curBefore = cur;
+      // 行動を当てる
+      if (t == "f") p.fold = 1;
+      else if (t == "r") {
+        put(p, a.x);
+        if (!a.s) p.pfr = 1;
+        cur = p.bet;
+        P.forEach((q, j) => j != i && !q.fold && !q.allin && (q.acted = 0));
+      } else {
+        if (!a.s && a.x) p.pc = 1;
+        if (a.s && !a.x) p.ck = a.s;
+        put(p, a.x);
+      }
+      p.acted = 1;
+      if (!mine[i]) continue;
+      // track と同じ数え方
+      if (!a.s) {
+        if (curBefore > bb && !p.hs.f3) {
+          p.hs.f3 = 1;
+          add(all, "f3");
+          if (t == "r") add(all, "b3");
+        }
+        if (curBefore <= bb && M0 <= 10 && !p.hs.so) {
+          p.hs.so = 1;
+          add(all, "so");
+          if (t == "r" && p.allin) add(all, "sp");
+        }
+        continue;
+      }
+      const tr = tier(p.h, B);
+      if (t == "r") {
+        const k = tr < 2 ? "B" : "V";
+        add(all, "agg");
+        add(all, "pb");
+        if (tr < 2) add(all, "pbw");
+        add(all, "n" + k);
+        add(all, "z" + k, z);
+        add(all, "q" + k, z * z);
+      } else if (t == "c" && toCall > 0) add(all, "call");
+      if (toCall > 0) {
+        add(all, "fb");
+        if (t == "f") add(all, "fbF");
+      }
+      if (cto) {
+        add(all, "cto");
+        if (t == "r") add(all, "bct");
+      }
+      if (ckb) {
+        add(all, "cb");
+        if (t == "r") add(all, "cbR");
+      }
+      if (!toCall && tr >= 2) {
+        add(all, "sO");
+        if (t != "r") add(all, "sC");
+      }
+    }
+    afterPre();
+    // フロップを見た（プリフロップで降りていない）・ショーダウンまで行った
+    if ((H.bd || []).length >= 3) {
+      const foldedPre = new Set((H.acts || []).filter((a) => a.s == 0 && a.a == "f").map((a) => a.i));
+      P.forEach((p, i) => mine[i] && !foldedPre.has(i) && add(all, "sf"));
+    }
+    for (const x of H.sd || []) if (mine[x.i]) add(all, "sd");
+  }
+  return { all, pos, depth };
+}
+// 傾向を、画面に出す行にする（ME_ROWS と同じ項目。値は割合や平均。記録が少なければ null）
+function analyzeRows(counts) {
+  const v = (n, d) => (counts[d] > 0 ? (counts[n] || 0) / counts[d] : null);
+  return ME_ROWS.map(([name, n, d, r]) => ({ name, key: n + "/" + d, kind: r, value: v(n, d), count: Math.round(counts[d] || 0) }));
 }
 // 時間が来ていればレベルを上げる
 function advanceLevel(g, now) {
@@ -1136,7 +1288,7 @@ const api = {
   R, SU, RK, LV, CPU0, TY, TYC, NM, NC, HN, REC_KEYS, BIGZ, MEMK, MEK, ME_DECAY, ME_PRIOR, ME_ROWS,
   fromType, shf, alive, itm, cd, e5, best, hcls, pre, draw, tier, track, newObs, obs, ai2,
   hand, bust, bal, advanceLevel, autoAct, playHand, soloSetup, loadMem, saveMem, meBlend, meStats,
-  histView, histText, cardText, fileStamp,
+  histView, histText, cardText, fileStamp, analyze, analyzeRows, posName,
 };
 if (typeof module == "object" && module.exports) module.exports = api;
 else root.AlpEngine = api;

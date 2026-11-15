@@ -5,7 +5,9 @@
 //   PORT        待ち受けるポート（既定 8080）
 //   HOST        待ち受けるアドレス（既定 0.0.0.0）
 //   CREATE_KEY  部屋を作るときに必要な合言葉。設定すると、知っている人しか部屋を作れない（身内用に推奨）
-//   DATA_DIR    ネームドCPUの記憶・ハンド履歴（hands/）を保存するフォルダ（既定 ./data）
+//   DATA_DIR    保存先のフォルダ（既定 ./data）。記録の DB（alpoker.db）・その毎日の写し（backups/）・
+//               ネームドCPUの記憶（store.json）・アカウント（accounts.json）・ハンド履歴のファイル（hands/）
+//   DB_FILE     記録の DB の場所を変えるとき（既定 DATA_DIR/alpoker.db）
 //   MAX_ROOMS   同時に開ける部屋の数（既定 20）
 //   ログイン（Discord / Google）の設定は auth.js の先頭を参照（PUBLIC_URL・*_CLIENT_ID など）
 // 部屋の進行と入室の受付は room.js（ホストのブラウザで動くものと同じ）。ここは「つなぐ」と「片付ける」だけ。
@@ -20,11 +22,15 @@ const { fileStamp } = require("../engine.js");
 const { fileStore } = require("./store.js");
 const { openAccounts } = require("./accounts.js");
 const { createAuth } = require("./auth.js");
+const { openDb, backupDaily } = require("./db.js");
+const { openRecords } = require("./records.js");
+const { cleanSync } = require("./solo.js");
+const { createReview } = require("./review.js");
 
 const ROOT = path.join(__dirname, ".."),
   // 配信するファイル（これ以外は 404）
-  FILES = { "/": "index.html", "/index.html": "index.html", "/style.css": "style.css", "/account.html": "account.html" };
-for (const f of ["engine.js", "room.js", "net.js", "game.js", "mp.js", "account.js"]) FILES["/" + f] = f;
+  FILES = { "/": "index.html", "/index.html": "index.html", "/style.css": "style.css", "/account.html": "account.html", "/review.html": "review.html" };
+for (const f of ["engine.js", "room.js", "net.js", "game.js", "mp.js", "solo-sync.js", "account.js", "review.js"]) FILES["/" + f] = f;
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8" };
 const IDLE_MS = 10 * 60e3, // 誰もいない部屋を片付けるまでの時間
   PING_MS = 25e3, // 生きているかの確認の間隔（スマホのスリープなどで切れた接続を見つける）
@@ -40,7 +46,35 @@ function startServer(opt = {}) {
     store = opt.store || fileStore(path.join(dataDir, "store.json")),
     log = opt.log || (opt.quiet ? () => {} : (...a) => console.log(new Date().toISOString(), ...a)),
     accounts = opt.accounts || openAccounts(path.join(dataDir, "accounts.json")),
-    auth = createAuth({ env, accounts, log, fetch: opt.fetch, providers: opt.providers });
+    auth = createAuth({ env, accounts, log, fetch: opt.fetch, providers: opt.providers }),
+    // 記録の DB（DB_FILE で場所を変えられる。":memory:" はテスト用）
+    dbFile = env.DB_FILE || path.join(dataDir, "alpoker.db"),
+    db = openDb(dbFile),
+    records = openRecords(db);
+  // 振り返り・傾向の口（json は下で定義するので、呼ばれたときに引く）
+  const review = (req, res, url) => createReviewOnce()(req, res, url);
+  let reviewFn = null;
+  const createReviewOnce = () => (reviewFn ||= createReview({ auth, accounts, records, json, log }));
+  // ひとり用の記録の送信：アカウントごとに1分あたり60回まで
+  const soloHits = new Map();
+  const soloLimited = (uid) => {
+    const t = Date.now(), h = soloHits.get(uid);
+    if (!h || t - h.t > 60e3) return soloHits.set(uid, { t, n: 1 }), false;
+    return ++h.n > 60;
+  };
+  // 記録の書き込みに失敗しても、ゲームは止めない
+  const rec = (what, f) => {
+    try {
+      return f();
+    } catch (e) {
+      log("records: 書き込めませんでした", what, e.message);
+    }
+  };
+  // 以前のハンド履歴ファイル（DATA_DIR/hands/*.json）で、まだ DB に入っていないものを取り込む
+  const imported = rec("import", () => records.importDir(path.join(dataDir, "hands"), log));
+  if (imported) log("records: 以前のハンド履歴を取り込みました", imported, "大会");
+  const stale = rec("stale", () => records.closeStale());
+  if (stale) log("records: 前に動いていたときの大会を、途中で閉じた扱いにしました", stale);
   const rooms = new Map(); // 部屋ID -> { host, socks: Map(接続id -> ws), empty: 誰もいなくなった時刻 }
   const rid = () => "alp-" + crypto.randomBytes(4).toString("hex").slice(0, 6);
   const secret = () => crypto.randomBytes(12).toString("base64url");
@@ -73,9 +107,18 @@ function startServer(opt = {}) {
         ws && ws.close();
       },
       store,
-      onOver: (g) => saveHands(id, g),
+      // 記録：始まったら大会を作り、ハンドが終わるたびに足し、ラウンドごとに順位を更新する
+      onStart: (g) => (r.tid = rec("start", () => records.start(g, { source: "mp", room: id, ownerUid: o.ownerUid }))),
+      onHand: (g, H) => r.tid && rec("hand", () => records.hand(r.tid, g, H)),
+      onRound: (g) => r.tid && rec("round", () => records.update(r.tid, g)),
+      onOver: (g) => {
+        if (r.tid) rec("finish", () => records.finish(r.tid, g, "over"));
+        const f = saveHands(id, g);
+        if (f && r.tid) rec("file", () => records.markFile(r.tid, f));
+      },
     });
-    rooms.set(id, { host, socks, users, empty: Date.now() });
+    const r = { host, socks, users, empty: Date.now(), tid: null };
+    rooms.set(id, r);
     log("room open", id, o.ownerUid ? "by " + o.ownerUid : "(key)", o.guests ? "guests ok" : "members only", "rooms:", rooms.size);
     return adm ? { room: id, adm } : { room: id };
   }
@@ -99,6 +142,7 @@ function startServer(opt = {}) {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, JSON.stringify(body));
       log("hands saved", file, g.hist.length);
+      return file;
     } catch (e) {
       log("hands: 保存できません", e.message);
     }
@@ -110,7 +154,11 @@ function startServer(opt = {}) {
     r.host.stop();
     // 大会の途中で閉じるときも、そこまでのハンド履歴を残す
     const g = r.host.room.state();
-    if (g && !g.over && g.hist.length) saveHands(id, g);
+    if (g && !g.over) {
+      if (r.tid) rec("close", () => records.finish(r.tid, g, "closed"));
+      const f = g.hist.length && saveHands(id, g);
+      if (f && r.tid) rec("file", () => records.markFile(r.tid, f));
+    }
     r.socks.forEach((ws) => ws.close());
     log("room closed", id, why, "rooms:", rooms.size);
   }
@@ -136,6 +184,33 @@ function startServer(opt = {}) {
     } catch (e) {
       log("auth error", e.stack || e.message);
       if (!res.headersSent) json(res, 500, { why: "サーバーの中で問題が起きました" });
+      return;
+    }
+    // 振り返り・打ち方の傾向（review.js）
+    if (review(req, res, url)) return;
+    // ひとり用の記録（ログインしている人が、このサイトのページから送る。solo-sync.js）
+    if (url.pathname === "/api/solo/sync" && req.method === "POST") {
+      const u = auth.browserUser(req);
+      if (!u) return json(res, 401, { why: "ログインしてください" });
+      if (soloLimited(u.id)) return json(res, 429, { why: "少し待ってから送ってください" });
+      let body = "";
+      req.on("data", (c) => {
+        body += c;
+        if (body.length > 512 * 1024) req.destroy();
+      });
+      req.on("end", () => {
+        let m;
+        try {
+          m = JSON.parse(body);
+        } catch (e) {
+          return json(res, 400, { why: "送信内容が読めません" });
+        }
+        const c = cleanSync(m, u.id);
+        if (c.error) return json(res, 400, { why: c.error });
+        const r = rec("solo", () => records.solo(u, c.ok));
+        if (!r) return json(res, 500, { why: "保存できませんでした" });
+        json(res, 200, { ok: 1, saved: r.saved });
+      });
       return;
     }
     if (url.pathname === "/api/rooms" && req.method === "POST") {
@@ -246,6 +321,16 @@ function startServer(opt = {}) {
 
   // 期限切れのセッション・招待を1時間ごとに掃除する
   const sweeper = setInterval(() => accounts.sweep(), 36e5);
+  // DB の写しを1日1つ取る（DATA_DIR/backups/alpoker-日付.db、14日分）。起動時と、1時間ごとに「今日の分があるか」を見る
+  const backupDir = path.join(dataDir, "backups");
+  const backup = () =>
+    dbFile !== ":memory:" &&
+    backupDaily(db, backupDir, 14).then(
+      (f) => f && log("backup:", f),
+      (e) => log("backup: 写しを取れませんでした", e.message),
+    );
+  backup();
+  const backuper = setInterval(backup, 36e5);
   // 管理用の口：ADMIN_PORT を設定したときだけ開く（"auto" は空いているポート。テスト用）
   const adminPort = env.ADMIN_PORT === "auto" ? 0 : +env.ADMIN_PORT || null;
   return new Promise((resolve) => {
@@ -261,6 +346,7 @@ function startServer(opt = {}) {
         accounts,
         port: addr.port,
         rooms,
+        db, // テスト用
         saveHands, // テスト用
         close: () =>
           new Promise((r) => {
@@ -268,9 +354,13 @@ function startServer(opt = {}) {
             clearInterval(sweeper);
             local && local.close();
             accounts.flush();
+            clearInterval(backuper);
             for (const id of [...rooms.keys()]) closeRoom(id, "shutdown");
             wss.close();
-            server.close(() => r());
+            server.close(() => {
+              db.close();
+              r();
+            });
             store.flush && store.flush();
           }),
       });
