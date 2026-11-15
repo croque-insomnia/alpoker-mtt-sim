@@ -210,6 +210,12 @@ function mpAccount() {
       e.textContent = me.user ? `ログイン中：${me.user.name}　` : "";
       a.textContent = me.user ? "アカウント" : "ログイン（Discord / Google）";
       e.appendChild(a);
+      if (me.user) {
+        const r = document.createElement("a");
+        r.href = "review.html";
+        r.textContent = "振り返り・傾向";
+        e.append("　", r);
+      }
       e.hidden = false;
       if (me.user) mpMember(me.user);
     })

@@ -135,6 +135,14 @@ function createAuth(opt) {
   // このサイトのページから来たときだけ、Cookie のセッションを使う（別のサイトに仕込まれた接続・送信は、ゲストとして扱う）
   const browserSid = (req) => (sameOrigin(req) ? sid(req) : ""),
     browserUser = (req) => accounts.sessionUser(browserSid(req));
+  // 読むだけの GET 用。ブラウザは同じサイトの GET に Origin を付けないので、「別のサイトだと分かるもの」だけを断る
+  // （別のサイトのページが fetch しても、応答は読めない。Cookie も SameSite=Lax なので、ふつうは付かない）
+  const readerUser = (req) => {
+    const o = req.headers.origin, site = req.headers["sec-fetch-site"];
+    if (o && !sameOrigin(req)) return null;
+    if (site && site !== "same-origin" && site !== "none") return null;
+    return accounts.sessionUser(sid(req));
+  };
   // 戻り先は、このアプリの中のページだけ（外のサイトへ飛ばす踏み台にさせない）
   const safeNext = (n) => {
     try {
@@ -291,6 +299,7 @@ function createAuth(opt) {
     if (p === "/api/me") return reply(accounts.rename(me.id, b.name)), true;
     if (p === "/api/me/unlink") return reply(accounts.unlinkExternal(me.id, String(b.provider || ""))), true;
     if (p === "/api/me/logout-all") return reply({ ended: accounts.endUserSessions(me.id) }), true;
+    if (p === "/api/me/share") return reply(accounts.setShare(me.id, !!b.on)), true;
     // 管理者だけ
     if (me.role !== "admin") return json(res, 403, { why: "管理者だけが使えます" }), true;
     if (p === "/api/admin/users") return reply({ users: accounts.listUsers() }), true;
@@ -339,7 +348,7 @@ function createAuth(opt) {
     return new Promise((resolve) => srv.listen(port, "127.0.0.1", () => resolve(srv)));
   }
 
-  return { handle, userFromReq, browserSid, browserUser, startLocalAdmin, enabled: () => !!Object.keys(prov).length, providers: () => Object.keys(prov) };
+  return { handle, userFromReq, browserSid, browserUser, readerUser, startLocalAdmin, enabled: () => !!Object.keys(prov).length, providers: () => Object.keys(prov) };
 }
 
 module.exports = { createAuth, parseCookies, PROVIDERS };

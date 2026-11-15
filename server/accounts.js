@@ -70,6 +70,7 @@ function openAccounts(file, opt = {}) {
       name: u.name,
       role: u.role,
       disabled: u.disabled ? 1 : 0,
+      share: u.share ? 1 : 0, // 身内CPU化に使ってよい（他のメンバーが打ち方の傾向を見られる）
       createdAt: u.createdAt,
       lastLogin: u.lastLogin,
       identities: Object.values(db.identities)
@@ -173,6 +174,19 @@ function openAccounts(file, opt = {}) {
 
     // ---- 人 ----
     getUser: (id) => publicUser(userOf(id)),
+    // 身内CPU化に使ってよいか（本人が決める）
+    setShare(userId, on) {
+      const u = userOf(userId);
+      if (!u) return { error: "ログインし直してください" };
+      u.share = on ? 1 : 0;
+      dirty();
+      return { user: publicUser(u) };
+    },
+    // 傾向を見てよい人（使ってよいにした人。止めている人は除く）
+    sharedUsers: () =>
+      Object.values(db.users)
+        .filter((u) => u.share && !u.disabled)
+        .map((u) => ({ id: u.id, name: u.name })),
     // その表示名を使っているアカウントがあるか（ゲストには使わせない。止めているアカウントの名前も使わせない）
     nameTaken: (name) => {
       const n = cleanName(name).toLowerCase();

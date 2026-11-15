@@ -92,6 +92,24 @@ function openRecords(db) {
         .all(...args)
         .map((r) => Object.assign(JSON.parse(r.data), { source: r.source }));
     },
+    // その人が参加した大会（新しい順）。自分の順位・リエントリー・配られたハンドの数つき
+    tournamentsOf(uid, limit = 200) {
+      return db
+        .prepare(
+          `SELECT t.id, t.source, t.room, t.started_at, t.finished_at, t.finished, t.closed, t.entries, t.blind_min,
+                  e.oid, e.place, e.rebuys,
+                  (SELECT COUNT(*) FROM hand_players hp WHERE hp.tournament_id = t.id AND hp.uid = e.uid) AS hands
+           FROM entries e JOIN tournaments t ON t.id = e.tournament_id
+           WHERE e.uid = ? ORDER BY t.started_at DESC, t.id DESC LIMIT ?`,
+        )
+        .all(uid, limit);
+    },
+    // その人がその大会に参加していれば { t: 大会, oid: その人の席 }。していなければ null
+    entryOf(tid, uid) {
+      const r = db.prepare(`SELECT t.*, e.oid FROM entries e JOIN tournaments t ON t.id = e.tournament_id WHERE e.tournament_id = ? AND e.uid = ?`).get(tid, uid);
+      return r ? { t: r, oid: r.oid } : null;
+    },
+    handsIn: (tid) => db.prepare(`SELECT data FROM hands WHERE tournament_id = ? ORDER BY n`).all(tid).map((r) => JSON.parse(r.data)),
     // その人の打ち方の傾向（engine.js の analyze）。対人（mp）と対CPU（solo）を分けたものと、合わせたもの
     analyzeUser(uid, o = {}) {
       const hs = this.handsOf(uid, { since: o.since }), mine = (s) => s.uid === uid;

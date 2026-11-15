@@ -25,11 +25,12 @@ const { createAuth } = require("./auth.js");
 const { openDb, backupDaily } = require("./db.js");
 const { openRecords } = require("./records.js");
 const { cleanSync } = require("./solo.js");
+const { createReview } = require("./review.js");
 
 const ROOT = path.join(__dirname, ".."),
   // 配信するファイル（これ以外は 404）
-  FILES = { "/": "index.html", "/index.html": "index.html", "/style.css": "style.css", "/account.html": "account.html" };
-for (const f of ["engine.js", "room.js", "net.js", "game.js", "mp.js", "solo-sync.js", "account.js"]) FILES["/" + f] = f;
+  FILES = { "/": "index.html", "/index.html": "index.html", "/style.css": "style.css", "/account.html": "account.html", "/review.html": "review.html" };
+for (const f of ["engine.js", "room.js", "net.js", "game.js", "mp.js", "solo-sync.js", "account.js", "review.js"]) FILES["/" + f] = f;
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8" };
 const IDLE_MS = 10 * 60e3, // 誰もいない部屋を片付けるまでの時間
   PING_MS = 25e3, // 生きているかの確認の間隔（スマホのスリープなどで切れた接続を見つける）
@@ -50,6 +51,10 @@ function startServer(opt = {}) {
     dbFile = env.DB_FILE || path.join(dataDir, "alpoker.db"),
     db = openDb(dbFile),
     records = openRecords(db);
+  // 振り返り・傾向の口（json は下で定義するので、呼ばれたときに引く）
+  const review = (req, res, url) => createReviewOnce()(req, res, url);
+  let reviewFn = null;
+  const createReviewOnce = () => (reviewFn ||= createReview({ auth, accounts, records, json, log }));
   // ひとり用の記録の送信：アカウントごとに1分あたり60回まで
   const soloHits = new Map();
   const soloLimited = (uid) => {
@@ -181,6 +186,8 @@ function startServer(opt = {}) {
       if (!res.headersSent) json(res, 500, { why: "サーバーの中で問題が起きました" });
       return;
     }
+    // 振り返り・打ち方の傾向（review.js）
+    if (review(req, res, url)) return;
     // ひとり用の記録（ログインしている人が、このサイトのページから送る。solo-sync.js）
     if (url.pathname === "/api/solo/sync" && req.method === "POST") {
       const u = auth.browserUser(req);
