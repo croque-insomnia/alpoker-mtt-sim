@@ -172,6 +172,7 @@ test("大会のハンド履歴をファイルに残す", async (t) => {
   await until(() => fs.statSync(path.join(dir, "hands", f)).size > 0);
   const body = JSON.parse(fs.readFileSync(path.join(dir, "hands", f), "utf8"));
   assert.equal(body.format, "alpoker-hands");
-  assert.deepEqual(body.players, [{ name: "A", place: 3, re: 1 }]);
+  assert.equal(body.version, 2);
+  assert.deepEqual(body.players, [{ uid: null, name: "A", place: 3, re: 1, stats: {} }]);
   assert.equal(body.hands.length, 2);
 });

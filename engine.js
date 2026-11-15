@@ -676,7 +676,7 @@ function* hand(g, T, log) {
           bb,
           an,
           tb: (g.tables || []).indexOf(T) + 1, // 画面の「卓 n」と同じ番号
-          seats: ps.map((p) => ({ name: p.name, oid: p.oid, hero: p.hero ? 1 : 0, st: p.stack, h: p.h.slice() })),
+          seats: ps.map((p) => ({ name: p.name, oid: p.oid, uid: p.uid || undefined, hero: p.hero ? 1 : 0, st: p.stack, h: p.h.slice() })),
           acts: [],
           bd: [],
           sd: [],
@@ -946,12 +946,13 @@ function bal(g) {
 //   acts: [{ s: その時のボードの枚数(0/3/4/5), i: 席の番号, a: "f"フォールド/"k"チェック/"c"コール/"b"ベット/"r"レイズ, x: 出した額, to: その時点のベット額, ai: オールイン }],
 //   bd: ボード, sd: [{ i, r: 役の名前 }]（ショーダウン）, win: [{ x: ポットの額, w: [勝った席の番号] }] }
 // 見せる相手に合わせて写しを作る。oid を渡すと「その人が配られたハンド」だけにし、その人の手札と公開された手札だけを残す
+// アカウントの ID（uid）は、サーバーのファイルにだけ残し、写しには入れない
 function histView(hands, oid) {
   return (hands || [])
     .filter((H) => oid == null || H.seats.some((s) => s.oid == oid))
     .map((H) => ({
       ...H,
-      seats: H.seats.map((s) => ({ ...s, h: oid == null || s.oid == oid || s.shown ? s.h : null })),
+      seats: H.seats.map(({ uid, ...s }) => ({ ...s, h: oid == null || s.oid == oid || s.shown ? s.h : null })),
     }));
 }
 const cardText = (c) => RK[c % 13] + SU[(c / 13) | 0];

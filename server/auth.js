@@ -297,7 +297,7 @@ function createAuth(opt) {
     return new Promise((resolve) => srv.listen(port, "127.0.0.1", () => resolve(srv)));
   }
 
-  return { handle, userFromReq, startLocalAdmin, enabled: () => !!Object.keys(prov).length, providers: () => Object.keys(prov) };
+  return { handle, userFromReq, sameOrigin, startLocalAdmin, enabled: () => !!Object.keys(prov).length, providers: () => Object.keys(prov) };
 }
 
 module.exports = { createAuth, parseCookies, PROVIDERS };

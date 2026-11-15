@@ -43,7 +43,8 @@ function createRoom(o) {
   const here = (p) => p.hero && p.alive && !p.away;
   const tlog = (t) => (s) => (t.lg ||= []).push(s);
 
-  // players: [{ id, name }]（人間のプレイヤー。順番どおりに番号を振る） / durMin: ブラインド間隔（分）
+  // players: [{ id, name, uid }]（人間のプレイヤー。順番どおりに番号を振る。uid はアカウントの ID、ゲストは null）
+  // durMin: ブラインド間隔（分）
   function start(players, durMin) {
     if (g || !players.length) return false;
     g = { dur: durMin * 6e4, lv: 0, entries: 40, mp: 1, hist: [], now: ck.now };
@@ -51,8 +52,9 @@ function createRoom(o) {
     const nh = players.length,
       used = new Set(players.map((h) => h.name.toLowerCase())),
       nm = shf(NM.filter((n) => !used.has(n.toLowerCase())));
+    // rec: 打ち方の記録（VPIP など。engine.js の track が数える。大会結果と一緒に残し、身内CPU作りに使う）
     g.P = players.map((h, i) => ({
-      id: i, oid: "h" + i, name: h.name, hero: 1, pid: h.id, ty: ["—"], stack: 1e4, re: 0, alive: 1,
+      id: i, oid: "h" + i, name: h.name, uid: h.uid || null, hero: 1, pid: h.id, ty: ["—"], stack: 1e4, re: 0, alive: 1, rec: [{}],
     }));
     for (let j = 0; j < 40 - nh; j++) {
       const id = nh + j, nc = NC[j];
@@ -212,7 +214,7 @@ function createRoom(o) {
     if (now - (asked[from] || 0) < 2000) return o.deliver(from, { t: "hands", busy: 1 }); // 中身は送らないが、待っている画面には知らせる
     asked[from] = now;
     const me = g.P.find((p) => p.pid == from);
-    o.deliver(from, { t: "hands", over: g.over ? 1 : 0, h: g.over ? g.hist : me ? histView(g.hist, me.oid) : [] });
+    o.deliver(from, { t: "hands", over: g.over ? 1 : 0, h: histView(g.hist, g.over ? null : me ? me.oid : "") });
   }
   // 接続が切れた人（退出させた人も）は、自動でチェック/フォールドにする
   function left(id) {
@@ -304,6 +306,12 @@ function createRoom(o) {
 // o.local: { id, name, deliver(msg) } ホスト自身がこの場で遊ぶとき（ブラウザのホスト）。サーバーでは省略
 // o.onRoster(full): 参加者一覧が変わったとき（ホストの画面用。full には host の印も入る）
 // o.adminKey: 部屋を作った人の合言葉（サーバー用）。join でこれを送った人は、開始・退出をメッセージで操作できる
+// ---- アカウント（簡易サーバーでログインしているとき。どれも省略できる） ----
+// o.userOf(id): その接続のアカウント { id, name, role } か null（ゲスト）
+//   アカウントで入る人は、名前もパスワードも要らない。同じアカウントで入り直すと同じ席に戻る（端末をまたいでも）
+// o.ownerUid: 部屋を作った人のアカウント ID。その人と、サイトの管理者（role "admin"）は開始・退出を操作できる
+// o.guests: false ならゲスト（アカウントなし）は入れない（既定は入れる）
+// o.reservedName(name): その名前がアカウントの表示名と重なるか（ゲストには使わせない）
 // o.store, o.clock, o.onOver: createRoom と同じ
 function createHost(o) {
   const ck = o.clock || realClock,
@@ -312,10 +320,11 @@ function createHost(o) {
     hostAlias = "u" + rid(),
     conns = new Set(), // 入室済みの接続
     kicked = new Set(), // 退出させた接続（閉じるまでの間に入り直させない）
-    toks = {}, // 発行した合言葉: tok -> { name, role, id, admin }（id は今つながっている接続）
-    admins = new Set(); // 部屋を作った人の接続
+    toks = {}, // 発行した合言葉: tok -> { name, role, id, admin, uid }（id は今つながっている接続）
+    admins = new Set(), // 開始・退出を操作できる接続
+    banned = new Set(); // 退出させたアカウント（この部屋には入り直せない）
   let started = false,
-    roster = []; // [{ id, name, role, host }]
+    roster = []; // [{ id, name, role, host, uid }]
   const local = o.local;
   if (local) roster.push({ id: local.id, name: local.name, role: "player", host: true });
   const say = (id, m) => (local && id == local.id ? local.deliver(m) : conns.has(id) && o.send(id, m));
@@ -348,38 +357,62 @@ function createHost(o) {
     o.send(id, { t: "no", why });
     ck.setTimeout(() => o.close(id), 300);
   };
+  const isAdmin = (u, m) => (!!o.adminKey && m.adm === o.adminKey) || (!!u && (u.id === o.ownerUid || u.role === "admin"));
   function join(id, m) {
     if (conns.has(id) || kicked.has(id)) return; // 入室済みの接続からの2回目の join は無視
+    const u = (o.userOf && o.userOf(id)) || null;
+    if (u) return joinAccount(id, m, u);
+    if (o.guests === false) return refuse(id, "この部屋はメンバー専用です。ログインしてから入ってください");
     if (m.pw !== o.password) return refuse(id, "パスワードが違います");
     const tk = typeof m.tok === "string" && Object.prototype.hasOwnProperty.call(toks, m.tok) && toks[m.tok];
     if (tk) return rejoin(id, m.tok, tk);
     const name = String(m.name || "").replace(/[<>&"'`]/g, "").trim().slice(0, 12);
     if (!name) return refuse(id, "名前を入力してください");
+    if (o.reservedName && o.reservedName(name)) return refuse(id, "その名前はメンバーが使っています。別の名前にするか、ログインしてください");
     // 切断中の人の名前も、本人が戻ってこられるように取っておく
     const taken = roster.map((p) => p.name).concat(Object.values(toks).map((t) => t.name));
     if (taken.some((n) => n.toLowerCase() === name.toLowerCase())) return refuse(id, "その名前は使われています");
+    enter(id, { name, role: m.role, admin: isAdmin(null, m), uid: null });
+  }
+  // アカウントで入る：パスワードも名前も要らない。同じアカウントの席がすでにあれば、そこへ戻る
+  function joinAccount(id, m, u) {
+    if (banned.has(u.id)) return refuse(id, "この部屋からは退出させられています");
+    const t = Object.keys(toks).find((k) => toks[k].uid === u.id);
+    if (t) {
+      toks[t].admin = toks[t].admin || isAdmin(u, m);
+      return rejoin(id, t, toks[t], "別の画面でこの部屋に入りました");
+    }
+    const name = String(u.name || "").replace(/[<>&"'`]/g, "").trim().slice(0, 12) || "player";
+    const taken = roster.map((p) => p.name).concat(Object.values(toks).map((x) => x.name));
+    if (taken.some((n) => n.toLowerCase() === name.toLowerCase())) return refuse(id, "同じ名前の人がもう入っています");
+    enter(id, { name, role: m.role, admin: isAdmin(u, m), uid: u.id });
+  }
+  function enter(id, { name, role, admin, uid }) {
     // 開始後はプレイヤー参加不可（観戦のみ）
-    const role = m.role === "player" && !started ? "player" : "spec";
-    const admin = !!o.adminKey && m.adm === o.adminKey;
+    role = role === "player" && !started ? "player" : "spec";
     const tok = secret();
-    toks[tok] = { name, role, id, admin };
+    toks[tok] = { name, role, id, admin, uid };
     conns.add(id);
     if (admin) admins.add(id);
-    roster.push({ id, name, role });
-    o.send(id, { t: "ok", id, room: o.roomId, role, started, tok, name, admin: admin ? 1 : 0 });
+    roster.push({ id, name, role, uid });
+    o.send(id, { t: "ok", id, room: o.roomId, role, started, tok, name, admin: admin ? 1 : 0, member: uid ? 1 : 0 });
     pushRoster();
   }
-  // 合言葉での復帰。前の接続がまだ残っていれば（切断に気づく前に入り直した場合）、そちらを閉じて置き換える
-  function rejoin(id, tok, tk) {
+  // 合言葉（またはアカウント）での復帰。前の接続がまだ残っていれば、そちらを閉じて置き換える
+  //   why を渡すと、前の接続に「入り直しても無駄」な理由として伝える（別の画面と席を奪い合い続けないように）
+  function rejoin(id, tok, tk, why) {
     const old = tk.id;
-    if (conns.delete(old)) o.close(old);
+    if (conns.delete(old)) {
+      if (why) o.send(old, { t: "no", why });
+      o.close(old);
+    }
     admins.delete(old);
     roster = roster.filter((p) => p.id !== old);
     tk.id = id;
     conns.add(id);
     if (tk.admin) admins.add(id);
-    roster.push({ id, name: tk.name, role: tk.role });
-    o.send(id, { t: "ok", id, room: o.roomId, role: tk.role, started, tok, name: tk.name, back: 1, admin: tk.admin ? 1 : 0 });
+    roster.push({ id, name: tk.name, role: tk.role, uid: tk.uid });
+    o.send(id, { t: "ok", id, room: o.roomId, role: tk.role, started, tok, name: tk.name, back: 1, admin: tk.admin ? 1 : 0, member: tk.uid ? 1 : 0 });
     room.rejoin(old, id);
     pushRoster();
   }
@@ -409,7 +442,10 @@ function createHost(o) {
     kick(id) {
       if (!conns.has(id)) return;
       const t = tokOf(id);
-      if (t) delete toks[t]; // 退出させた人は合言葉で戻れない
+      if (t) {
+        if (toks[t].uid) banned.add(toks[t].uid); // アカウントなら、この部屋には入り直せない
+        delete toks[t]; // 退出させた人は合言葉で戻れない
+      }
       o.send(id, { t: "kick" });
       kicked.add(id);
       ck.setTimeout(() => o.close(id), 300);
@@ -420,7 +456,7 @@ function createHost(o) {
       const hum = roster.filter((r) => r.role == "player");
       if (started || !hum.length) return false;
       started = true;
-      return room.start(hum.map(({ id, name }) => ({ id, name })), durMin);
+      return room.start(hum.map(({ id, name, uid }) => ({ id, name, uid })), durMin);
     },
     roster: () => roster.slice(),
     // 誰もつながっていないか（サーバーで空き部屋を片付ける目安）

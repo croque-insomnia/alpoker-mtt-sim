@@ -5,7 +5,8 @@ const { createRoom, ACT_MS } = require("../room.js");
 const { fakeClock } = require("./helpers.js");
 
 // 人間 nh 人＋観戦1人で大会を開き、人間役はランダムに打つ（放置・切断・戻るも混ぜる）
-function play(nh, { afk = 0.05, leave = 0, back = 0.3, seed = 1 } = {}) {
+// drop: 最初のハンドのあとで必ず切断させる人（偶然に頼らず、切断の場面を必ず通すため）
+function play(nh, { afk = 0.05, leave = 0, back = 0.3, seed = 1, drop = [] } = {}) {
   let s = seed * 2654435761 % 4294967296;
   const rnd = () => (s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296;
   const clock = fakeClock();
@@ -47,6 +48,11 @@ function play(nh, { afk = 0.05, leave = 0, back = 0.3, seed = 1 } = {}) {
     }
     if (g.wait && !wasWait) {
       rounds++;
+      if (rounds == 1)
+        for (const id of drop) {
+          gone.add(id);
+          room.left(id);
+        }
       // チップの合計は「エントリー数 × 開始スタック」のまま
       const tot = g.P.reduce((a, p) => a + (p.alive ? p.stack : 0), 0);
       if (tot != g.entries * 1e4) problems.push(`chips ${tot} != ${g.entries * 1e4} (round ${rounds})`);
@@ -75,9 +81,10 @@ for (const nh of [1, 3, 8, 20, 40]) {
 }
 
 test("切断する人がいても進む", () => {
-  const r = play(8, { seed: 7, leave: 0.002 });
+  const r = play(8, { seed: 7, leave: 0.002, drop: ["p1", "p2"] });
   assert.deepEqual(r.problems, []);
-  assert.ok(r.gone.size > 0);
+  assert.ok(r.gone.has("p1") && r.gone.has("p2"));
+  assert.ok(r.g.over || !r.g.P.some((p) => p.hero && p.alive && !r.gone.has(p.pid)), "最後まで進む");
 });
 
 test("時間切れで離席扱いになり、戻るで解ける", () => {
