@@ -16,7 +16,17 @@ function play(nh, { afk = 0.05, leave = 0, back = 0.3, seed = 1, drop = [] } = {
   const room = createRoom({
     deliver: (id, m) => {
       msgs++;
-      if (m.t == "view") last[id] = { v: m.v, fresh: 1 };
+      if (m.t != "view") return;
+      last[id] = { v: m.v, fresh: 1 };
+      // 手札の漏れ：自分以外の、公開されていない手札が view に入っていないか。
+      // 送った瞬間の状態と照らし合わせる（あとで照らすと、卓の並べ替えなどで席の順がずれて、漏れと見誤る）
+      const g0 = room.state(), me = g0.P.find((p) => p.pid == id), T = g0.tables[m.v.ti];
+      if (T)
+        m.v.pl.forEach((p, i) => {
+          const real = T.p.concat(T.gone || [])[i];
+          if (real && p.name != real.name) problems.push("seat order " + id);
+          if (p.h && real && real != me && !real.show) problems.push("leak " + real.name);
+        });
     },
     members: () => ids.filter((i) => !gone.has(i)),
     clock,
@@ -25,16 +35,11 @@ function play(nh, { afk = 0.05, leave = 0, back = 0.3, seed = 1, drop = [] } = {
   const g = room.state();
   let wasWait = 0, rounds = 0, timeouts = 0, backs = 0;
   const check = () => {
-    // 手札の漏れ：自分以外の、公開されていない手札が view に入っていないか
     for (const id of ids) {
       const L = last[id];
       if (!L || !L.fresh) continue;
       L.fresh = 0;
-      const v = L.v, me = g.P.find((p) => p.pid == id), T = g.tables[v.ti];
-      if (T) v.pl.forEach((p, i) => {
-        const real = T.p.concat(T.gone || [])[i];
-        if (p.h && real && real != me && !real.show) problems.push("leak " + real.name);
-      });
+      const v = L.v;
       if (gone.has(id)) continue;
       if (v.req) {
         if (rnd() < afk) { timeouts++; continue; } // 放置
