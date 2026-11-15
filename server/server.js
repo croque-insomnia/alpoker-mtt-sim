@@ -38,7 +38,7 @@ function startServer(opt = {}) {
     idleMs = opt.idleMs || IDLE_MS,
     dataDir = path.resolve(env.DATA_DIR || path.join(ROOT, "data")),
     store = opt.store || fileStore(path.join(dataDir, "store.json")),
-    log = opt.quiet ? () => {} : (...a) => console.log(new Date().toISOString(), ...a),
+    log = opt.log || (opt.quiet ? () => {} : (...a) => console.log(new Date().toISOString(), ...a)),
     accounts = opt.accounts || openAccounts(path.join(dataDir, "accounts.json")),
     auth = createAuth({ env, accounts, log, fetch: opt.fetch, providers: opt.providers });
   const rooms = new Map(); // 部屋ID -> { host, socks: Map(接続id -> ws), empty: 誰もいなくなった時刻 }
