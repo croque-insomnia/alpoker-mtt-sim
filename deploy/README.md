@@ -137,6 +137,16 @@ cd /opt/alpoker-mtt-sim && sudo git pull && sudo npm ci --omit=dev && sudo syste
 
 設定ファイル（`deploy/` の中身）を変えたときは、手順 5・6 の `cp` をやり直して、`sudo systemctl daemon-reload`（service を変えたとき）・`sudo systemctl reload caddy`（Caddyfile を変えたとき）。
 
+## ハンド履歴を取り出すとき
+
+大会が終わるたびに `/var/lib/alpoker/hands/` に1ファイルずつ残る（全ハンド・全員の手札つき）。手元の PC から:
+
+```bash
+scp kaina@<VPSのIP>:/var/lib/alpoker/hands/*.json .
+```
+
+`/var/lib/alpoker` は `alpoker` ユーザーのものなので、読めなければ VPS 上で `sudo cp` してから取り出す。
+
 ## 合言葉を変えるとき
 
 `/etc/alpoker.env` を書き換えて `sudo systemctl restart alpoker`。部屋を作る人にだけ伝え直す（参加するだけの人には関係ない）。

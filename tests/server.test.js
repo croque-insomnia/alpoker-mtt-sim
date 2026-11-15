@@ -157,3 +157,20 @@ test("合言葉を設定しなければ、誰でも部屋を作れる", async (t
   assert.equal((await create({ pw: "pw" })).status, 200);
   assert.equal((await fetch(base + "api/hello").then((r) => r.json())).needKey, false);
 });
+
+test("大会のハンド履歴をファイルに残す", async (t) => {
+  const os = require("os"), fs = require("fs"), path = require("path");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "alp-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const { srv } = await boot(t, { DATA_DIR: dir });
+  const g = { entries: 41, P: [{ hero: 1, name: "A", place: 3, re: 1 }, { name: "cpu" }], hist: [{ n: 1 }, { n: 2 }] };
+  srv.saveHands("alp-test", g);
+  await until(() => fs.existsSync(path.join(dir, "hands")) && fs.readdirSync(path.join(dir, "hands")).length == 1);
+  const f = fs.readdirSync(path.join(dir, "hands"))[0];
+  assert.match(f, /^\d{8}-\d{4}-alp-test\.json$/);
+  await until(() => fs.statSync(path.join(dir, "hands", f)).size > 0);
+  const body = JSON.parse(fs.readFileSync(path.join(dir, "hands", f), "utf8"));
+  assert.equal(body.format, "alpoker-hands");
+  assert.deepEqual(body.players, [{ name: "A", place: 3, re: 1 }]);
+  assert.equal(body.hands.length, 2);
+});

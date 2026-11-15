@@ -5,7 +5,7 @@
 //   PORT        待ち受けるポート（既定 8080）
 //   HOST        待ち受けるアドレス（既定 0.0.0.0）
 //   CREATE_KEY  部屋を作るときに必要な合言葉。設定すると、知っている人しか部屋を作れない（身内用に推奨）
-//   DATA_DIR    ネームドCPUの記憶などを保存するフォルダ（既定 ./data）
+//   DATA_DIR    ネームドCPUの記憶・ハンド履歴（hands/）を保存するフォルダ（既定 ./data）
 //   MAX_ROOMS   同時に開ける部屋の数（既定 20）
 // 部屋の進行と入室の受付は room.js（ホストのブラウザで動くものと同じ）。ここは「つなぐ」と「片付ける」だけ。
 "use strict";
@@ -15,6 +15,7 @@ const http = require("http"),
   crypto = require("crypto");
 const { WebSocketServer } = require("ws");
 const { createHost } = require("../room.js");
+const { fileStamp } = require("../engine.js");
 const { fileStore } = require("./store.js");
 
 const ROOT = path.join(__dirname, ".."),
@@ -32,7 +33,8 @@ function startServer(opt = {}) {
     createKey = env.CREATE_KEY || "",
     maxRooms = +env.MAX_ROOMS || 20,
     idleMs = opt.idleMs || IDLE_MS,
-    store = opt.store || fileStore(path.resolve(env.DATA_DIR || path.join(ROOT, "data"), "store.json")),
+    dataDir = path.resolve(env.DATA_DIR || path.join(ROOT, "data")),
+    store = opt.store || fileStore(path.join(dataDir, "store.json")),
     log = opt.quiet ? () => {} : (...a) => console.log(new Date().toISOString(), ...a);
   const rooms = new Map(); // 部屋ID -> { host, socks: Map(接続id -> ws), empty: 誰もいなくなった時刻 }
   const rid = () => "alp-" + crypto.randomBytes(4).toString("hex").slice(0, 6);
@@ -57,16 +59,43 @@ function startServer(opt = {}) {
         ws && ws.close();
       },
       store,
+      onOver: (g) => saveHands(id, g),
     });
     rooms.set(id, { host, socks, empty: Date.now() });
     log("room open", id, "rooms:", rooms.size);
     return { room: id, adm };
+  }
+  // 大会が終わったら（途中で部屋を閉じるときも）、ハンド履歴をファイルに残す（DATA_DIR/hands/日時-部屋ID.json）
+  // 終了の直前でも書き終わるように、同期で書く
+  function saveHands(id, g) {
+    const d = new Date(),
+      file = path.join(dataDir, "hands", `${fileStamp(d)}-${id}.json`),
+      body = {
+        format: "alpoker-hands",
+        version: 1,
+        room: id,
+        finishedAt: d.toISOString(),
+        finished: !!g.over, // false: 途中で部屋が閉じた
+        entries: g.entries,
+        players: g.P.filter((p) => p.hero).map((p) => ({ name: p.name, place: p.place || 0, re: p.re })),
+        hands: g.hist,
+      };
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(body));
+      log("hands saved", file, g.hist.length);
+    } catch (e) {
+      log("hands: 保存できません", e.message);
+    }
   }
   function closeRoom(id, why) {
     const r = rooms.get(id);
     if (!r) return;
     rooms.delete(id);
     r.host.stop();
+    // 大会の途中で閉じるときも、そこまでのハンド履歴を残す
+    const g = r.host.room.state();
+    if (g && !g.over && g.hist.length) saveHands(id, g);
     r.socks.forEach((ws) => ws.close());
     log("room closed", id, why, "rooms:", rooms.size);
   }
@@ -171,6 +200,7 @@ function startServer(opt = {}) {
       resolve({
         port: addr.port,
         rooms,
+        saveHands, // テスト用
         close: () =>
           new Promise((r) => {
             clearInterval(timer);
