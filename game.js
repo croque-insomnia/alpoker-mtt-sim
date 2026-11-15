@@ -1,6 +1,6 @@
 // game.js — ひとり用の画面と進行。ゲームの中身（ルール・CPU）は engine.js にある。
 const $ = (i) => document.getElementById(i);
-const { LV, cd, hand, bust, bal, advanceLevel, playHand, soloSetup, saveMem, meStats, REC_KEYS, MEK, ME_DECAY, ME_PRIOR, histText } =
+const { LV, cd, hand, bust, bal, advanceLevel, playHand, soloSetup, saveMem, meStats, REC_KEYS, MEK, ME_DECAY, ME_PRIOR, histText, fileStamp } =
   AlpEngine;
 // ブラウザの保存先（ネームドCPUの記憶などに使う）
 const LS = {
@@ -282,9 +282,7 @@ function saveFile(name, text, type) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 function saveHands(hands, kind, extra) {
-  const d = new Date(),
-    two = (x) => String(x).padStart(2, "0"),
-    stamp = `${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}`;
+  const stamp = fileStamp(new Date());
   if (!hands || !hands.length) return ($("hxm").textContent = "まだ記録されたハンドがありません");
   $("hxm").textContent = `${hands.length}ハンドを保存しました` + (extra || "");
   if (kind == "json")

@@ -135,7 +135,7 @@ test("ハンド履歴：大会中は自分のハンドだけ、終わったら�
   room.start([{ id: "a", name: "A" }, { id: "b", name: "B" }], 1);
   const g = room.state();
   const act = () => {
-    for (const id of ["a", "b"]) if (last[id] && last[id].req) room.msg(id, { t: "act", a: { t: last[id].req.toCall ? "c" : "c" } });
+    for (const id of ["a", "b"]) if (last[id] && last[id].req) room.msg(id, { t: "act", a: { t: "c" } });
   };
   // 数ハンド進めて、大会中の履歴を頼む
   while (g.hist.length < 3 && !g.over) {
@@ -153,7 +153,7 @@ test("ハンド履歴：大会中は自分のハンドだけ、終わったら�
   // 続けて頼んでも、すぐには送らない
   delete got.a;
   room.msg("a", { t: "hands" });
-  assert.equal(got.a, undefined);
+  assert.deepEqual(got.a, { t: "hands", busy: 1 }, "中身は送らず、待つように知らせる");
   // 最後まで進めると、全ハンドを全員の手札つきで送る
   clock.run(1e6, act);
   assert.ok(g.over);

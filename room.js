@@ -46,7 +46,7 @@ function createRoom(o) {
   // players: [{ id, name }]（人間のプレイヤー。順番どおりに番号を振る） / durMin: ブラインド間隔（分）
   function start(players, durMin) {
     if (g || !players.length) return false;
-    g = { dur: durMin * 6e4, lv: 0, entries: 40, mp: 1, hist: [] };
+    g = { dur: durMin * 6e4, lv: 0, entries: 40, mp: 1, hist: [], now: ck.now };
     g.lvEnd = ck.now() + g.dur;
     const nh = players.length,
       used = new Set(players.map((h) => h.name.toLowerCase())),
@@ -209,10 +209,10 @@ function createRoom(o) {
   // 大会が終わったら、全ハンドを全員の手札つきで送る（終わってから振り返るため）
   function hands(from) {
     const now = ck.now();
-    if (now - (asked[from] || 0) < 2000) return;
+    if (now - (asked[from] || 0) < 2000) return o.deliver(from, { t: "hands", busy: 1 }); // 中身は送らないが、待っている画面には知らせる
     asked[from] = now;
     const me = g.P.find((p) => p.pid == from);
-    o.deliver(from, { t: "hands", over: g.over ? 1 : 0, h: g.over ? histView(g.hist, null) : me ? histView(g.hist, me.oid) : [] });
+    o.deliver(from, { t: "hands", over: g.over ? 1 : 0, h: g.over ? g.hist : me ? histView(g.hist, me.oid) : [] });
   }
   // 接続が切れた人（退出させた人も）は、自動でチェック/フォールドにする
   function left(id) {

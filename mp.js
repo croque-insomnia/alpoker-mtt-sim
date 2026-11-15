@@ -22,6 +22,7 @@ function mpRecv(m) {
   else if (m.t == "hands" && MP.hx) {
     const kind = MP.hx;
     MP.hx = "";
+    if (m.busy) return ($("hxm").textContent = "少し待ってから、もう一度押してください");
     saveHands(Array.isArray(m.h) ? m.h : [], kind, m.over ? "（全員の手札つき）" : "（大会中なので、自分の手札と公開された手札だけ）");
   }
 }

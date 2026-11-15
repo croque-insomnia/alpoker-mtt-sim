@@ -15,6 +15,7 @@ const http = require("http"),
   crypto = require("crypto");
 const { WebSocketServer } = require("ws");
 const { createHost } = require("../room.js");
+const { fileStamp } = require("../engine.js");
 const { fileStore } = require("./store.js");
 
 const ROOT = path.join(__dirname, ".."),
@@ -64,31 +65,37 @@ function startServer(opt = {}) {
     log("room open", id, "rooms:", rooms.size);
     return { room: id, adm };
   }
-  // 大会が終わったら、ハンド履歴をファイルに残す（DATA_DIR/hands/日時-部屋ID.json）
+  // 大会が終わったら（途中で部屋を閉じるときも）、ハンド履歴をファイルに残す（DATA_DIR/hands/日時-部屋ID.json）
+  // 終了の直前でも書き終わるように、同期で書く
   function saveHands(id, g) {
     const d = new Date(),
-      two = (x) => String(x).padStart(2, "0"),
-      stamp = `${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}`,
-      file = path.join(dataDir, "hands", `${stamp}-${id}.json`),
+      file = path.join(dataDir, "hands", `${fileStamp(d)}-${id}.json`),
       body = {
         format: "alpoker-hands",
         version: 1,
         room: id,
         finishedAt: d.toISOString(),
+        finished: !!g.over, // false: 途中で部屋が閉じた
         entries: g.entries,
         players: g.P.filter((p) => p.hero).map((p) => ({ name: p.name, place: p.place || 0, re: p.re })),
         hands: g.hist,
       };
-    fs.mkdir(path.dirname(file), { recursive: true }, (e) => {
-      if (e) return log("hands: フォルダを作れません", e.message);
-      fs.writeFile(file, JSON.stringify(body), (e2) => (e2 ? log("hands: 保存できません", e2.message) : log("hands saved", file, g.hist.length)));
-    });
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(body));
+      log("hands saved", file, g.hist.length);
+    } catch (e) {
+      log("hands: 保存できません", e.message);
+    }
   }
   function closeRoom(id, why) {
     const r = rooms.get(id);
     if (!r) return;
     rooms.delete(id);
     r.host.stop();
+    // 大会の途中で閉じるときも、そこまでのハンド履歴を残す
+    const g = r.host.room.state();
+    if (g && !g.over && g.hist.length) saveHands(id, g);
     r.socks.forEach((ws) => ws.close());
     log("room closed", id, why, "rooms:", rooms.size);
   }

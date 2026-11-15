@@ -665,16 +665,17 @@ function* hand(g, T, log) {
     bd = (T.bd = []);
   ps.forEach((p) => (p.h = [d.pop(), d.pop()]));
   // ハンド履歴：g.hist（配列）があり、人間が配られているハンドだけ記録する。形は histText の上を参照
+  // g.hist に入れるのはハンドが終わってから（進行中のハンドは、中途半端な形でも相手の手札つきでも外に出さない）
   const H =
     g.hist && ps.some((p) => p.hero)
       ? {
-          n: (g.hn = (g.hn || 0) + 1),
-          at: Date.now(),
+          n: 0, // 通し番号は、終わって g.hist に入れるときに振る
+          at: g.now ? g.now() : Date.now(),
           lv: g.lv + 1,
           sb,
           bb,
           an,
-          tb: (T.no ||= g.tno = (g.tno || 0) + 1),
+          tb: (g.tables || []).indexOf(T) + 1, // 画面の「卓 n」と同じ番号
           seats: ps.map((p) => ({ name: p.name, oid: p.oid, hero: p.hero ? 1 : 0, st: p.stack, h: p.h.slice() })),
           acts: [],
           bd: [],
@@ -682,7 +683,6 @@ function* hand(g, T, log) {
           win: [],
         }
       : null;
-  if (H) g.hist.push(H);
   const put = (p, x) => {
     x = Math.min(x, p.stack);
     p.stack -= x;
@@ -896,6 +896,8 @@ function* hand(g, T, log) {
       H.seats[i].end = p.stack;
       if (p.show) H.seats[i].shown = 1;
     });
+    H.n = g.hist.length + 1;
+    g.hist.push(H);
   }
   yield { k: "end" };
 }
@@ -953,9 +955,11 @@ function histView(hands, oid) {
     }));
 }
 const cardText = (c) => RK[c % 13] + SU[(c / 13) | 0];
+// 日時の表記。fileStamp はファイル名用（20261115-0930）
+const two = (x) => String(x).padStart(2, "0"),
+  fileStamp = (d) => `${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}`;
 // 読みやすいテキストにする（額は、そのハンドのBB単位）
 function histText(hands) {
-  const two = (x) => String(x).padStart(2, "0");
   const ST = { 0: "プリフロップ", 3: "フロップ", 4: "ターン", 5: "リバー" },
     A = { f: "フォールド", k: "チェック", c: "コール", b: "ベット", r: "レイズ" };
   return hands
@@ -1127,7 +1131,7 @@ const api = {
   R, SU, RK, LV, CPU0, TY, TYC, NM, NC, HN, REC_KEYS, BIGZ, MEMK, MEK, ME_DECAY, ME_PRIOR, ME_ROWS,
   fromType, shf, alive, itm, cd, e5, best, hcls, pre, draw, tier, track, newObs, obs, ai2,
   hand, bust, bal, advanceLevel, autoAct, playHand, soloSetup, loadMem, saveMem, meBlend, meStats,
-  histView, histText, cardText,
+  histView, histText, cardText, fileStamp,
 };
 if (typeof module == "object" && module.exports) module.exports = api;
 else root.AlpEngine = api;
