@@ -24,11 +24,12 @@ const { openAccounts } = require("./accounts.js");
 const { createAuth } = require("./auth.js");
 const { openDb, backupDaily } = require("./db.js");
 const { openRecords } = require("./records.js");
+const { cleanSync } = require("./solo.js");
 
 const ROOT = path.join(__dirname, ".."),
   // 配信するファイル（これ以外は 404）
   FILES = { "/": "index.html", "/index.html": "index.html", "/style.css": "style.css", "/account.html": "account.html" };
-for (const f of ["engine.js", "room.js", "net.js", "game.js", "mp.js", "account.js"]) FILES["/" + f] = f;
+for (const f of ["engine.js", "room.js", "net.js", "game.js", "mp.js", "solo-sync.js", "account.js"]) FILES["/" + f] = f;
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8" };
 const IDLE_MS = 10 * 60e3, // 誰もいない部屋を片付けるまでの時間
   PING_MS = 25e3, // 生きているかの確認の間隔（スマホのスリープなどで切れた接続を見つける）
@@ -49,6 +50,13 @@ function startServer(opt = {}) {
     dbFile = env.DB_FILE || path.join(dataDir, "alpoker.db"),
     db = openDb(dbFile),
     records = openRecords(db);
+  // ひとり用の記録の送信：アカウントごとに1分あたり60回まで
+  const soloHits = new Map();
+  const soloLimited = (uid) => {
+    const t = Date.now(), h = soloHits.get(uid);
+    if (!h || t - h.t > 60e3) return soloHits.set(uid, { t, n: 1 }), false;
+    return ++h.n > 60;
+  };
   // 記録の書き込みに失敗しても、ゲームは止めない
   const rec = (what, f) => {
     try {
@@ -171,6 +179,31 @@ function startServer(opt = {}) {
     } catch (e) {
       log("auth error", e.stack || e.message);
       if (!res.headersSent) json(res, 500, { why: "サーバーの中で問題が起きました" });
+      return;
+    }
+    // ひとり用の記録（ログインしている人が、このサイトのページから送る。solo-sync.js）
+    if (url.pathname === "/api/solo/sync" && req.method === "POST") {
+      const u = auth.browserUser(req);
+      if (!u) return json(res, 401, { why: "ログインしてください" });
+      if (soloLimited(u.id)) return json(res, 429, { why: "少し待ってから送ってください" });
+      let body = "";
+      req.on("data", (c) => {
+        body += c;
+        if (body.length > 512 * 1024) req.destroy();
+      });
+      req.on("end", () => {
+        let m;
+        try {
+          m = JSON.parse(body);
+        } catch (e) {
+          return json(res, 400, { why: "送信内容が読めません" });
+        }
+        const c = cleanSync(m, u.id);
+        if (c.error) return json(res, 400, { why: c.error });
+        const r = rec("solo", () => records.solo(u, c.ok));
+        if (!r) return json(res, 500, { why: "保存できませんでした" });
+        json(res, 200, { ok: 1, saved: r.saved });
+      });
       return;
     }
     if (url.pathname === "/api/rooms" && req.method === "POST") {

@@ -51,6 +51,8 @@ function end() {
   bust(G, T);
   saveMem(G, LS);
   saveMe();
+  // ログインしていれば、このハンドをアカウントへ送る（solo-sync.js。読み込んでいなければ何もしない）
+  if (typeof soloSync != "undefined") soloSync.hand(G);
   G.wait = 1;
   render();
   if (h.stack <= 0) {
@@ -107,6 +109,7 @@ function fin() {
   try {
     localStorage.setItem("mtt5", JSON.stringify(S));
   } catch (e) {}
+  if (typeof soloSync != "undefined") soloSync.finish(G, pl);
   render();
   $("ov").hidden = 0;
   $("ov").innerHTML =
@@ -302,8 +305,11 @@ function begin() {
   G.me = loadMe();
   for (const k in G.me.recent) G.me.recent[k] *= ME_DECAY;
   G.me.tn++;
-  G.P[0].rec = [G.me.all, G.me.recent];
+  // G.tr：この大会だけの記録（アカウントへ送る用）
+  G.tr = {};
+  G.P[0].rec = [G.me.all, G.me.recent, G.tr];
   saveMe();
+  if (typeof soloSync != "undefined") soloSync.start(G);
   $("start").hidden = 1;
   $("game").hidden = 0;
   nx();

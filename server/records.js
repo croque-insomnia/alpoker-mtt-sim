@@ -22,6 +22,12 @@ function openRecords(db) {
     file: db.prepare(`UPDATE tournaments SET file = ? WHERE id = ?`),
     hasFile: db.prepare(`SELECT 1 FROM tournaments WHERE file = ?`),
     stale: db.prepare(`UPDATE tournaments SET closed = 1 WHERE source = 'mp' AND finished = 0 AND closed = 0`),
+    soloFind: db.prepare(`SELECT id FROM tournaments WHERE source = 'solo' AND owner_uid = ? AND client_key = ?`),
+    soloNew: db.prepare(`INSERT INTO tournaments (source, owner_uid, client_key, started_at, entries, blind_min) VALUES ('solo', ?, ?, ?, ?, ?)`),
+    soloEntry: db.prepare(`INSERT OR IGNORE INTO entries (tournament_id, oid, uid, name) VALUES (?, 'hero', ?, ?)`),
+    soloMeta: db.prepare(`UPDATE tournaments SET entries = COALESCE(?, entries) WHERE id = ?`),
+    soloEnd: db.prepare(`UPDATE tournaments SET finished = 1, finished_at = ? WHERE id = ? AND finished = 0`),
+    soloEntryUpd: db.prepare(`UPDATE entries SET stats = ?, rebuys = ?, place = COALESCE(?, place), name = ? WHERE tournament_id = ? AND oid = 'hero'`),
   };
   const humans = (g) => g.P.filter((p) => p.hero);
   const places = db.transaction((tid, g) => {
@@ -53,6 +59,24 @@ function openRecords(db) {
       places(tid, g);
       for (const p of humans(g)) if (p.rec) q.stats.run(JSON.stringify(p.rec[0] || {}), tid, p.oid);
       q.fin.run(at || Date.now(), how === "over" ? 1 : 0, how === "closed" ? 1 : 0, g.entries, tid);
+    }),
+    // ひとり用：ブラウザから届いた記録（solo.js で検め済み）を入れる。同じものが2回届いても増えない
+    // 戻り値: { tid, saved: 新しく入ったハンドの数 }
+    solo: db.transaction((user, s, at) => {
+      let row = q.soloFind.get(user.id, s.key);
+      const tid = row ? row.id : Number(q.soloNew.run(user.id, s.key, s.startedAt || at || Date.now(), s.entries, s.blindMin).lastInsertRowid);
+      q.soloEntry.run(tid, user.id, user.name);
+      let saved = 0;
+      for (const H of s.hands) {
+        const r = q.hand.run(tid, H.n, H.at, H.lv, H.tb, JSON.stringify(H));
+        if (!r.changes) continue;
+        saved++;
+        q.hp.run(Number(r.lastInsertRowid), tid, "hero", user.id);
+      }
+      q.soloMeta.run(s.entries, tid);
+      q.soloEntryUpd.run(JSON.stringify(s.stats), s.re, s.place, user.name, tid);
+      if (s.over) q.soloEnd.run(at || Date.now(), tid);
+      return { tid, saved };
     }),
     // ハンド履歴ファイルと大会を結びつける（取り込みのとき、同じ大会を2回入れないため）
     markFile: (tid, file) => q.file.run(path.basename(file), tid),

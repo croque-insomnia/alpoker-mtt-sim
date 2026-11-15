@@ -52,6 +52,11 @@ const MIGRATIONS = [
   );
   CREATE INDEX hand_players_uid ON hand_players(uid, tournament_id);
   `,
+  // 2: ひとり用の大会は、ブラウザが決めた目印（client_key）で見分ける（送り直しても同じ大会になる）
+  `
+  ALTER TABLE tournaments ADD COLUMN client_key TEXT;
+  CREATE UNIQUE INDEX tournaments_client ON tournaments(owner_uid, client_key) WHERE client_key IS NOT NULL;
+  `,
 ];
 
 // file: DB のファイル（":memory:" でメモリだけ。テスト用）
