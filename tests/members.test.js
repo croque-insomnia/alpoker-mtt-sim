@@ -19,11 +19,11 @@ async function boot(t) {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const accounts = openAccounts();
   // PUBLIC_URL は待ち受けのポートが決まってから作る（Origin の確認に使う）
-  const tmp = await startServer({ PORT: 0, HOST: "127.0.0.1", quiet: 1, accounts, store: { get: () => null, set() {} } });
+  const tmp = await startServer({ PORT: 0, HOST: "127.0.0.1", quiet: 1, DB_FILE: ":memory:", accounts, store: { get: () => null, set() {} } });
   const port = tmp.port;
   await tmp.close();
   const srv = await startServer({
-    PORT: port, HOST: "127.0.0.1", quiet: 1, accounts, store: { get: () => null, set() {} }, DATA_DIR: dir, CREATE_KEY: "key",
+    PORT: port, HOST: "127.0.0.1", quiet: 1, DB_FILE: ":memory:", accounts, store: { get: () => null, set() {} }, DATA_DIR: dir, CREATE_KEY: "key",
     PUBLIC_URL: `http://127.0.0.1:${port}/`,
   });
   t.after(() => srv.close());

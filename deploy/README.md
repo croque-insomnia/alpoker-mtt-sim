@@ -204,9 +204,26 @@ cd /opt/alpoker-mtt-sim && sudo git pull && sudo npm ci --omit=dev && sudo syste
 
 設定ファイル（`deploy/` の中身）を変えたときは、手順 5・6 の `cp` をやり直して、`sudo systemctl daemon-reload`（service を変えたとき）・`sudo systemctl reload caddy`（Caddyfile を変えたとき）。
 
+## 記録の DB とバックアップ
+
+大会・参加者・全ハンドは、**ハンドが終わるたびに** `/var/lib/alpoker/alpoker.db`（SQLite）へ書く。サーバーが突然落ちても、そこまでのハンドは残る。
+
+- **毎日の写し**：サーバーが自分で、1日1つ `/var/lib/alpoker/backups/alpoker-日付.db` を作る（14日分を残し、古いものは消す）。systemd のタイマーなどは要らない
+- **写しから戻すとき**：サーバーを止め、写しを `alpoker.db` に置き換えて、起動する
+  ```bash
+  sudo systemctl stop alpoker
+  sudo cp /var/lib/alpoker/backups/alpoker-20261115.db /var/lib/alpoker/alpoker.db
+  sudo rm -f /var/lib/alpoker/alpoker.db-wal /var/lib/alpoker/alpoker.db-shm
+  sudo chown alpoker:alpoker /var/lib/alpoker/alpoker.db
+  sudo systemctl start alpoker
+  ```
+- **手元にも写しを取りたいとき**：`scp kaina@<VPSのIP>:/var/lib/alpoker/backups/alpoker-日付.db .`（読めなければ VPS 上で `sudo cp` してから）
+- 以前のハンド履歴ファイル（`hands/*.json`）は、初めて起動したときに一度だけ DB に取り込む
+- サーバーを入れ直すとき、`better-sqlite3`（SQLite の部品）は `npm ci` でふつうは出来上がりのものが落ちてくる。もし組み立てが始まって失敗したら、`sudo apt install -y build-essential python3` してから `npm ci` をやり直す
+
 ## ハンド履歴を取り出すとき
 
-大会が終わるたびに `/var/lib/alpoker/hands/` に1ファイルずつ残る（全ハンド・全員の手札つき）。手元の PC から:
+大会が終わるたびに `/var/lib/alpoker/hands/` にも1ファイルずつ残る（全ハンド・全員の手札つき。DB と同じ中身）。手元の PC から:
 
 ```bash
 scp kaina@<VPSのIP>:/var/lib/alpoker/hands/*.json .
