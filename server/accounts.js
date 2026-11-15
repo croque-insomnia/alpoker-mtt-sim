@@ -28,7 +28,10 @@ function openAccounts(file, opt = {}) {
   if (file)
     try {
       db = { ...db, ...JSON.parse(fs.readFileSync(file, "utf8")) };
-    } catch (e) {}
+    } catch (e) {
+      // まだ無いのは普通。読めない・壊れているときに空で始めると、次の保存で本物を上書きしてしまうので、起動を止める
+      if (e.code !== "ENOENT") throw new Error(`accounts: ${file} を読めません（${e.message}）。中身を直すか、ファイルを退避してから起動してください`);
+    }
   const flush = () => {
     clearTimeout(timer);
     timer = null;
@@ -59,11 +62,14 @@ function openAccounts(file, opt = {}) {
       if (!taken(n)) return n;
     }
   }
+  // 外から渡された id で引くとき用（"__proto__" などで Object.prototype を掴ませない）
+  const userOf = (id) => (typeof id === "string" && Object.hasOwn(db.users, id) ? db.users[id] : undefined);
   const publicUser = (u) =>
     u && {
       id: u.id,
       name: u.name,
       role: u.role,
+      disabled: u.disabled ? 1 : 0,
       createdAt: u.createdAt,
       lastLogin: u.lastLogin,
       identities: Object.values(db.identities)
@@ -96,6 +102,7 @@ function openAccounts(file, opt = {}) {
       sub = String(sub);
       const key = provider + ":" + sub, idn = db.identities[key];
       if (idn && db.users[idn.userId]) {
+        if (db.users[idn.userId].disabled) return { error: "このアカウントは止められています", code: "disabled" };
         Object.assign(idn, { name: cleanName(name) || idn.name, avatar: avatar || null });
         db.users[idn.userId].lastLogin = now();
         dirty();
@@ -115,9 +122,9 @@ function openAccounts(file, opt = {}) {
     linkExternal(userId, { provider, sub, name, avatar }) {
       const key = provider + ":" + String(sub), idn = db.identities[key];
       if (!db.users[userId]) return { error: "ログインし直してください" };
-      if (idn && idn.userId !== userId) return { error: "その外部アカウントは、別の人に紐づいています" };
+      if (idn && idn.userId !== userId) return { error: "その外部アカウントは、別の人に紐づいています", code: "taken" };
       if (!idn && Object.values(db.identities).some((i) => i.userId === userId && i.provider === provider))
-        return { error: "同じ種類の外部アカウントは1つまでです。先に今の紐づけを外してください" };
+        return { error: "同じ種類の外部アカウントは1つまでです。先に今の紐づけを外してください", code: "one" };
       db.identities[key] = { provider, sub: String(sub), userId, name: cleanName(name), avatar: avatar || null, linkedAt: (idn && idn.linkedAt) || now() };
       dirty();
       return { user: publicUser(db.users[userId]) };
@@ -146,7 +153,7 @@ function openAccounts(file, opt = {}) {
       const k = sha(t), s = db.sessions[k], at = now();
       if (!s || s.expiresAt < at) return null;
       const u = db.users[s.userId];
-      if (!u) return null;
+      if (!u || u.disabled) return null;
       if (at - s.seenAt > 36e5) {
         s.seenAt = at;
         s.expiresAt = at + SESSION_DAYS * DAY;
@@ -165,7 +172,7 @@ function openAccounts(file, opt = {}) {
     },
 
     // ---- 人 ----
-    getUser: (id) => publicUser(db.users[id]),
+    getUser: (id) => publicUser(userOf(id)),
     listUsers: () =>
       Object.values(db.users)
         .sort((a, b) => a.createdAt - b.createdAt)
@@ -180,11 +187,21 @@ function openAccounts(file, opt = {}) {
       return { user: publicUser(u) };
     },
     setRole(userId, role) {
-      const u = db.users[userId];
+      const u = userOf(userId);
       if (!u) return { error: "見つかりません" };
       if (u.role === "admin" && role !== "admin" && Object.values(db.users).filter((x) => x.role === "admin").length <= 1)
         return { error: "最後の管理者は外せません" };
       u.role = role === "admin" ? "admin" : "member";
+      dirty();
+      return { user: publicUser(u) };
+    },
+    // アカウントを止める・戻す。止めるとセッションを消し、外部ログインでも入れなくなる（管理者は、先にメンバーにしてから）
+    setDisabled(userId, on) {
+      const u = userOf(userId);
+      if (!u) return { error: "見つかりません" };
+      if (on && u.role === "admin") return { error: "管理者は止められません。先にメンバーにしてください" };
+      u.disabled = on ? 1 : 0;
+      if (on) this.endUserSessions(userId);
       dirty();
       return { user: publicUser(u) };
     },
