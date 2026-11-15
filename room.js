@@ -27,10 +27,13 @@ const memStore = () => {
 // o.store: ネームドCPUの記憶の保存先 { get, set }（省略するとその場限り）
 // o.clock: { now, setTimeout, clearTimeout }（テストで時間を早送りするため。省略すると本物の時計）
 function createRoom(o) {
-  const ck = o.clock || realClock,
+  const ck0 = o.clock || realClock,
+    // stop() のあとは、残っているタイマーが来ても何もしない（サーバーで部屋を片付けるとき用）
+    ck = { now: ck0.now, setTimeout: (f, ms) => ck0.setTimeout(() => !stopped && f(), ms), clearTimeout: ck0.clearTimeout },
     store = o.store || memStore(),
     watch = {}; // 観戦中の人が見ている卓
-  let g = null, // 大会の状態（開始前は null）
+  let stopped = false,
+    g = null, // 大会の状態（開始前は null）
     open = 0, // このラウンドで人間の操作を待っている卓の数
     at = 0; // リエントリー確認の締め切りタイマー
   const tableOf = (p) => g.tables.find((t) => t.p.includes(p));
@@ -274,7 +277,12 @@ function createRoom(o) {
     if (g) each((id) => o.deliver(id, { t: "view", v: view(id) }));
   }
 
-  return { start, msg, left, rejoin, push, view, started: () => !!g, state: () => g };
+  return {
+    start, msg, left, rejoin, push, view,
+    started: () => !!g,
+    state: () => g,
+    stop: () => (stopped = true),
+  };
 }
 
 // ================= 入室の受付 =================
@@ -282,6 +290,7 @@ function createRoom(o) {
 // o.send(id, msg) / o.close(id): 接続 id へ送る・接続を閉じる（通信方式ごとに用意する）
 // o.local: { id, name, deliver(msg) } ホスト自身がこの場で遊ぶとき（ブラウザのホスト）。サーバーでは省略
 // o.onRoster(full): 参加者一覧が変わったとき（ホストの画面用。full には host の印も入る）
+// o.adminKey: 部屋を作った人の合言葉（サーバー用）。join でこれを送った人は、開始・退出をメッセージで操作できる
 // o.store, o.clock: createRoom と同じ
 function createHost(o) {
   const ck = o.clock || realClock,
@@ -290,7 +299,8 @@ function createHost(o) {
     hostAlias = "u" + rid(),
     conns = new Set(), // 入室済みの接続
     kicked = new Set(), // 退出させた接続（閉じるまでの間に入り直させない）
-    toks = {}; // 発行した合言葉: tok -> { name, role, id }（id は今つながっている接続）
+    toks = {}, // 発行した合言葉: tok -> { name, role, id, admin }（id は今つながっている接続）
+    admins = new Set(); // 部屋を作った人の接続
   let started = false,
     roster = []; // [{ id, name, role, host }]
   const local = o.local;
@@ -315,6 +325,7 @@ function createHost(o) {
   }
   function drop(id) {
     conns.delete(id);
+    admins.delete(id);
     roster = roster.filter((p) => p.id !== id);
     pushRoster();
     room.left(id);
@@ -335,33 +346,44 @@ function createHost(o) {
     if (taken.some((n) => n.toLowerCase() === name.toLowerCase())) return refuse(id, "その名前は使われています");
     // 開始後はプレイヤー参加不可（観戦のみ）
     const role = m.role === "player" && !started ? "player" : "spec";
+    const admin = !!o.adminKey && m.adm === o.adminKey;
     const tok = secret();
-    toks[tok] = { name, role, id };
+    toks[tok] = { name, role, id, admin };
     conns.add(id);
+    if (admin) admins.add(id);
     roster.push({ id, name, role });
-    o.send(id, { t: "ok", id, room: o.roomId, role, started, tok, name });
+    o.send(id, { t: "ok", id, room: o.roomId, role, started, tok, name, admin: admin ? 1 : 0 });
     pushRoster();
   }
   // 合言葉での復帰。前の接続がまだ残っていれば（切断に気づく前に入り直した場合）、そちらを閉じて置き換える
   function rejoin(id, tok, tk) {
     const old = tk.id;
     if (conns.delete(old)) o.close(old);
+    admins.delete(old);
     roster = roster.filter((p) => p.id !== old);
     tk.id = id;
     conns.add(id);
+    if (tk.admin) admins.add(id);
     roster.push({ id, name: tk.name, role: tk.role });
-    o.send(id, { t: "ok", id, room: o.roomId, role: tk.role, started, tok, name: tk.name, back: 1 });
+    o.send(id, { t: "ok", id, room: o.roomId, role: tk.role, started, tok, name: tk.name, back: 1, admin: tk.admin ? 1 : 0 });
     room.rejoin(old, id);
     pushRoster();
   }
 
+  // 部屋を作った人の操作：開始（ブラインド間隔は 1・2・5 分から）・退出させる
+  function admin(id, m) {
+    if (m.a === "start") api.start([1, 2, 5].includes(+m.dur) ? +m.dur : 5);
+    else if (m.a === "kick" && m.id !== id) api.kick(m.id);
+  }
   if (local) pushRoster(); // ホスト自身を一覧に出す
-  return {
+  const api = {
     // 接続 id からメッセージが届いた
     data(id, m) {
       if (!m) return;
       if (m.t === "join") return join(id, m);
-      if (conns.has(id)) room.msg(id, m); // 入室済みの人のメッセージだけゲームへ渡す
+      if (!conns.has(id)) return; // 入室済みの人のメッセージだけ受け付ける
+      if (m.t === "admin") return admins.has(id) && admin(id, m);
+      room.msg(id, m);
     },
     // 接続 id が切れた
     closed(id) {
@@ -387,8 +409,12 @@ function createHost(o) {
       return room.start(hum.map(({ id, name }) => ({ id, name })), durMin);
     },
     roster: () => roster.slice(),
+    // 誰もつながっていないか（サーバーで空き部屋を片付ける目安）
+    empty: () => conns.size == 0,
+    stop: () => room.stop(),
     room,
   };
+  return api;
 }
 
 const api = { createRoom, createHost, ACT_MS, ASK_MS };

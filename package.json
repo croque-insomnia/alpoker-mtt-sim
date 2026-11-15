@@ -3,9 +3,13 @@
   "private": true,
   "description": "5-Max MTT vs CPU（身内用のポーカー疑似トーナメント）",
   "scripts": {
+    "start": "node server/server.js",
     "test": "node --test"
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "ws": "8.22.1"
   }
 }

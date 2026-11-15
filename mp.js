@@ -2,7 +2,15 @@
 // 大会の進行と入室の受付は room.js、通信は net.js にある。ここは「見せる」と「つなぐ」だけ。
 // ホストのブラウザでは room.js の部屋をそのまま動かし、参加者には通信で画面データ（view）を送る。
 let HOST = null; // ホストのブラウザで部屋を持っているとき：room.js の createHost
-const MP = { me: "", roster: [] };
+const MP = { me: "", roster: [], admin: 0 }; // admin: 簡易サーバーで部屋を作った人（開始・退出の操作ができる）
+// 簡易サーバー（server/server.js）から配信されているか。そうなら部屋はサーバーが持ち、通信は WebSocket にする
+// そうでなければ（ファイルを直接開いた・静的なホスティング）、これまでどおり PeerJS でホストのブラウザが部屋を持つ
+const SRV = /^https?:$/.test(location.protocol)
+  ? fetch("api/hello", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => (j && j.server ? j : null))
+      .catch(() => null)
+  : Promise.resolve(null);
 const mpEsc = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 // 自分の操作を部屋へ送る（ホストなら手元の部屋へ、参加者ならホストへ）
@@ -142,8 +150,8 @@ function mpNote(s, html) {
 function mpShowGame() {
   $("start").hidden = 1;
   $("game").hidden = 0;
-  if (HOST) {
-    // ホストはゲーム中も参加者一覧（退出させるボタン付き）を見られるように、ゲーム画面の下へ移す
+  if (HOST || MP.admin) {
+    // ホスト（部屋を作った人）はゲーム中も参加者一覧（退出させるボタン付き）を見られるように、ゲーム画面の下へ移す
     $("game").appendChild($("mp"));
     $("mpC").hidden = 1;
     $("mpBk").hidden = 1;
@@ -165,12 +173,14 @@ function mpRoster(r) {
     t.className = "tag";
     t.textContent = (p.host ? "ホスト・" : "") + (p.role === "spec" ? "観戦" : "プレイヤー");
     li.appendChild(t);
-    if (HOST && !p.host) {
+    if ((HOST || MP.admin) && !p.host && p.id !== MP.me) {
       const b = document.createElement("button");
       b.className = "g";
       b.textContent = "退出させる";
       // ゲーム中に退出させた人の席は、以後自動でチェック/フォールドになる
-      b.onclick = () => (!G.mp || confirm(p.name + " を退出させますか？（戻ってこられなくなります）")) && HOST.kick(p.id);
+      b.onclick = () =>
+        (!G.mp || confirm(p.name + " を退出させますか？（戻ってこられなくなります）")) &&
+        (HOST ? HOST.kick(p.id) : Net.send({ t: "admin", a: "kick", id: p.id }));
       li.appendChild(b);
     }
     ul.appendChild(li);
@@ -182,8 +192,8 @@ function mpUI() {
     RM = qs.get("r"),
     err = (s) => ($("mpM").textContent = s || "");
   $("mp").innerHTML = `<h3 style="margin-top:0">みんなで遊ぶ</h3><div id="mpE">
-<div id="mpH" ${HM ? "" : "hidden"}><input id="mhn" type="text" maxlength="12" placeholder="プレイヤー名"><input id="mhp" type="password" placeholder="パスワード（参加者に伝える）"><p>ブラインド間隔：<select id="mps"><option value="5">5分（標準）</option><option value="2">2分</option><option value="1">1分</option></select></p><button id="mhb">部屋を作る</button></div>
-<div id="mpJ" ${HM ? "hidden" : ""}><input id="mjr" type="text" placeholder="部屋ID（例: alp-xxxxx）"><input id="mjn" type="text" maxlength="12" placeholder="プレイヤー名"><input id="mjp" type="password" placeholder="パスワード"><label><input type="radio" name="mro" value="player" checked> プレイヤー</label> <label><input type="radio" name="mro" value="spec"> 観戦</label><br><button id="mjb">入室</button></div>
+<div id="mpH" ${HM ? "" : "hidden"}><input id="mhn" type="text" maxlength="12" placeholder="プレイヤー名"><input id="mhp" type="password" placeholder="パスワード（参加者に伝える）"><input id="mhk" type="password" placeholder="部屋を作る合言葉" hidden><p>ブラインド間隔：<select id="mps"><option value="5">5分（標準）</option><option value="2">2分</option><option value="1">1分</option></select></p><button id="mhb">部屋を作る</button><p class="mu"><a href="?">入室する側はこちら</a></p></div>
+<div id="mpJ" ${HM ? "hidden" : ""}><input id="mjr" type="text" placeholder="部屋ID（例: alp-xxxxx）"><input id="mjn" type="text" maxlength="12" placeholder="プレイヤー名"><input id="mjp" type="password" placeholder="パスワード"><label><input type="radio" name="mro" value="player" checked> プレイヤー</label> <label><input type="radio" name="mro" value="spec"> 観戦</label><br><button id="mjb">入室</button><p class="mu"><a href="?host">部屋を作る側はこちら</a></p></div>
 <p id="mpM" class="err"></p></div>
 <div id="mpRm" hidden><div id="mpI"></div><h4>参加者</h4><ul id="mpR" style="padding-left:20px"></ul><div id="mpC"></div><p id="mpS" class="ok"></p></div>
 <p id="mpBk"><a href="${location.pathname}">ひとりで遊ぶに戻る</a></p>`;
@@ -196,10 +206,23 @@ function mpUI() {
     $("mpE").hidden = 1;
     $("mpRm").hidden = 0;
   };
-  $("mhb").onclick = () => {
+  SRV.then((s) => {
+    if (!s) return;
+    Net.use(wsLink(location.href));
+    $("mhk").hidden = !s.needKey;
+  });
+  // 招待用の表示（部屋IDと招待URL）
+  const invite = (id) => {
+    const url = location.origin + location.pathname + "?r=" + id;
+    $("mpI").innerHTML = '<p>部屋ID：<code></code> <button class="g" id="mcp">招待URLをコピー</button></p><p class="mu">パスワードは別の方法で伝えてください。</p>';
+    $("mpI").querySelector("code").textContent = id;
+    $("mcp").onclick = () => navigator.clipboard && navigator.clipboard.writeText(url).then(() => ($("mcp").textContent = "コピーしました"));
+  };
+  $("mhb").onclick = async () => {
     const n = $("mhn").value.trim(), p = $("mhp").value;
     if (!n || !p) return err("名前とパスワードを入力してください");
     err("部屋を作成中…");
+    if (await SRV) return createOnServer(n, p);
     const link = Net.listen({
       ready: (id) => {
         MP.me = id;
@@ -214,10 +237,7 @@ function mpUI() {
         });
         err("");
         inRoom();
-        const url = location.origin + location.pathname + "?r=" + id;
-        $("mpI").innerHTML = '<p>部屋ID：<code></code> <button class="g" id="mcp">招待URLをコピー</button></p><p class="mu">パスワードは別の方法で伝えてください。</p>';
-        $("mpI").querySelector("code").textContent = id;
-        $("mcp").onclick = () => navigator.clipboard && navigator.clipboard.writeText(url).then(() => ($("mcp").textContent = "コピーしました"));
+        invite(id);
         $("mpC").innerHTML = '<button id="mgo">ゲーム開始</button>';
         $("mgo").onclick = () => HOST.start(+$("mps").value);
       },
@@ -226,6 +246,24 @@ function mpUI() {
       error: (e) => err("エラー：" + e),
       status: (s) => mpNote(s),
     });
+  };
+  // 簡易サーバーに部屋を作ってもらい、作った人として入室する
+  const createOnServer = async (n, p) => {
+    let r;
+    try {
+      const res = await fetch("api/rooms", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pw: p, key: $("mhk").value }),
+      });
+      r = await res.json();
+      if (!res.ok) return err(r.why || "部屋を作れませんでした");
+    } catch (e) {
+      return err("サーバーに接続できません");
+    }
+    MP.jp = { id: r.room, n, p, role: "player", adm: r.adm };
+    MP.retry = 0;
+    connect();
   };
   // 復帰用の合言葉は部屋ごとにタブへ保存する（再読み込みしても同じ席に戻れる。別のタブとは共有しない）
   const tokKey = (id) => "alp-tok:" + id,
@@ -246,7 +284,7 @@ function mpUI() {
   const connect = () => {
     const j = MP.jp;
     clearTimeout(MP.rtT);
-    Net.join(j.id, { name: j.n, pw: j.p, role: j.role, tok: tokGet(j.id) }, {
+    Net.join(j.id, { name: j.n, pw: j.p, role: j.role, tok: tokGet(j.id), adm: j.adm }, {
       joined: (m) => {
         MP.me = m.id;
         MP.in = 1;
@@ -255,7 +293,21 @@ function mpUI() {
         err("");
         mpNote("");
         inRoom();
-        $("mpI").textContent = `部屋 ${m.room} に入室しました（${m.name || j.n}・${m.role === "spec" ? "観戦" : "プレイヤー"}）。` + (m.started ? "" : "ホストの開始を待っています。");
+        // 再読み込みしたときに入室画面（部屋ID入り）が出るよう、アドレスを招待URLにしておく
+        try {
+          history.replaceState(null, "", "?r=" + encodeURIComponent(m.room));
+        } catch (e) {}
+        MP.admin = m.admin ? 1 : 0;
+        if (MP.admin) {
+          invite(m.room);
+          if (!m.started) {
+            $("mpC").innerHTML = '<button id="mgo">ゲーム開始</button>';
+            $("mgo").onclick = () => Net.send({ t: "admin", a: "start", dur: +$("mps").value });
+          }
+        } else
+          $("mpI").textContent =
+            `部屋 ${m.room} に入室しました（${m.name || j.n}・${m.role === "spec" ? "観戦" : "プレイヤー"}）。` +
+            (m.started ? "" : "ホストの開始を待っています。");
         if (m.started) mpShowGame();
       },
       roster: mpRoster,
