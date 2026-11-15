@@ -1,6 +1,6 @@
 # /etc/systemd/system/alpoker.service
 # 簡易サーバーを、ログインできない専用ユーザー alpoker で動かす。落ちたら3秒後に再起動する
-# 部屋を作る合言葉（CREATE_KEY）は /etc/alpoker.env に書く（リポジトリには書かない）
+# 部屋を作る合言葉（CREATE_KEY）と、Discord / Google の ID・秘密鍵は /etc/alpoker.env に書く（リポジトリには書かない）
 [Unit]
 Description=alpoker-mtt-sim
 After=network.target
@@ -11,6 +11,8 @@ WorkingDirectory=/opt/alpoker-mtt-sim
 EnvironmentFile=/etc/alpoker.env
 # 外からは Caddy 経由でだけ受ける（127.0.0.1）。保存先は systemd が /var/lib/alpoker に作る
 Environment=HOST=127.0.0.1 PORT=8080 DATA_DIR=/var/lib/alpoker
+# ログイン：公開 URL・Cookie を共有する範囲・Caddy 経由であること・管理用の口（127.0.0.1:8091。外には出さない）
+Environment=PUBLIC_URL=https://kaina-lab.com/poker/mtt/ COOKIE_PATH=/poker/ TRUST_PROXY=1 ADMIN_PORT=8091
 StateDirectory=alpoker
 ExecStart=/usr/bin/node server/server.js
 Restart=always

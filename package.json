@@ -4,6 +4,7 @@
   "description": "5-Max MTT vs CPU（身内用のポーカー疑似トーナメント）",
   "scripts": {
     "start": "node server/server.js",
+    "admin": "node server/admin.js",
     "test": "node --test"
   },
   "engines": {

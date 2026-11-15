@@ -4,6 +4,7 @@ const assert = require("node:assert");
 const WebSocket = require("ws");
 const { startServer } = require("../server/server.js");
 const { wsLink, joinRoom } = require("../net.js");
+const { openAccounts } = require("../server/accounts.js");
 
 const until = async (f, ms = 3000) => {
   const t0 = Date.now();
@@ -17,7 +18,7 @@ const mem = () => {
   return { get: (k) => m.get(k) ?? null, set: (k, v) => m.set(k, v) };
 };
 async function boot(t, opt = {}) {
-  const srv = await startServer({ PORT: 0, HOST: "127.0.0.1", CREATE_KEY: "key", quiet: 1, store: mem(), ...opt });
+  const srv = await startServer({ PORT: 0, HOST: "127.0.0.1", CREATE_KEY: "key", quiet: 1, store: mem(), accounts: openAccounts(), ...opt });
   t.after(() => srv.close());
   const base = `http://127.0.0.1:${srv.port}/`;
   const link = wsLink(base, WebSocket);
@@ -49,7 +50,7 @@ test("ページを配信し、それ以外のファイルは出さない", async
   for (const p of ["server/server.js", "package.json", "..%2Fpackage.json", "tests/server.test.js", "data/store.json"])
     assert.equal((await get(p))[0], 404, p);
   const hello = await fetch(base + "api/hello").then((r) => r.json());
-  assert.deepEqual(hello, { server: 1, needKey: true });
+  assert.deepEqual(hello, { server: 1, needKey: true, auth: 0 });
 });
 
 test("部屋を作るには合言葉とパスワードが要る", async (t) => {
