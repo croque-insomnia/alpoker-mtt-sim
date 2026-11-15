@@ -61,7 +61,7 @@ Discord か Google でログインできる（`account.html`）。ログイン�
 
 ## 簡易サーバー
 
-Node 20 以上で:
+Node 22 以上で:
 
 ```bash
 npm ci
@@ -96,4 +96,4 @@ npm test
 Node 標準のテスト機能を使う。サーバーのテストだけ `ws`（`npm ci` で入る）を使う。
 大会を早送りの時計で最後まで回して、チップの合計・手札が漏れていないか・切断や復帰・入室の手順を確かめる。
 
-PR を出すと GitHub Actions でも同じテストが回る（`.github/workflows/test.yml`、Node 20 と 22）。
+PR を出すと GitHub Actions でも同じテストが回る（`.github/workflows/test.yml`、Node 22 と 24）。
