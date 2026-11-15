@@ -146,8 +146,9 @@ test("ハンド履歴：大会中は自分のハンドだけ、終わったら�
   });
   room.start([{ id: "a", name: "A" }, { id: "b", name: "B" }], 1);
   const g = room.state();
+  // 人間は、打たれたら降り、打たれなければチェックする（何でもコールすると、数ハンドで2人ともバストして大会が終わることがある）
   const act = () => {
-    for (const id of ["a", "b"]) if (last[id] && last[id].req) room.msg(id, { t: "act", a: { t: "c" } });
+    for (const id of ["a", "b"]) if (last[id] && last[id].req) room.msg(id, { t: "act", a: { t: last[id].req.toCall ? "f" : "c" } });
   };
   // 数ハンド進めて、大会中の履歴を頼む
   while (g.hist.length < 3 && !g.over) {
