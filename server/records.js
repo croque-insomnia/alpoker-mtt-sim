@@ -8,6 +8,7 @@
 "use strict";
 const fs = require("fs"),
   path = require("path");
+const { analyze } = require("../engine.js");
 
 function openRecords(db) {
   const q = {
@@ -78,6 +79,29 @@ function openRecords(db) {
       if (s.over) q.soloEnd.run(at || Date.now(), tid);
       return { tid, saved };
     }),
+    // その人が配られたハンド（古い順）。source: "mp" / "solo" / 省略で両方、since: この時刻（ms）以降
+    handsOf(uid, o = {}) {
+      const where = ["hp.uid = ?"], args = [uid];
+      if (o.source) where.push("t.source = ?"), args.push(o.source);
+      if (o.since) where.push("h.at >= ?"), args.push(o.since);
+      return db
+        .prepare(
+          `SELECT h.data, t.source FROM hand_players hp JOIN hands h ON h.id = hp.hand_id JOIN tournaments t ON t.id = hp.tournament_id
+           WHERE ${where.join(" AND ")} ORDER BY h.at, h.id`,
+        )
+        .all(...args)
+        .map((r) => Object.assign(JSON.parse(r.data), { source: r.source }));
+    },
+    // その人の打ち方の傾向（engine.js の analyze）。対人（mp）と対CPU（solo）を分けたものと、合わせたもの
+    analyzeUser(uid, o = {}) {
+      const hs = this.handsOf(uid, { since: o.since }), mine = (s) => s.uid === uid;
+      return {
+        all: analyze(hs, mine),
+        mp: analyze(hs.filter((h) => h.source === "mp"), mine),
+        solo: analyze(hs.filter((h) => h.source === "solo"), mine),
+        hands: hs.length,
+      };
+    },
     // ハンド履歴ファイルと大会を結びつける（取り込みのとき、同じ大会を2回入れないため）
     markFile: (tid, file) => q.file.run(path.basename(file), tid),
     // DATA_DIR/hands/*.json（版1・版2）のうち、まだ入っていないものを取り込む。戻り値: 取り込んだ数
