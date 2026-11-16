@@ -156,7 +156,10 @@ function draw() {
   const mid = el("div", "mid"), bd = el("div", "bd");
   if (fr.board.length) fr.board.forEach((c) => bd.appendChild(card(c)));
   else bd.append(" ");
-  bd.appendChild(el("span", null, `POT ${f(fr.pot)} BB`));
+  // POT はこのストリートのベットを含めない（ゲーム画面と同じ）。ベットが出ている間は合計も添える
+  const bets = fr.seats.reduce((s, x) => s + (x.bet || 0), 0);
+  bd.appendChild(el("span", null, `POT ${f(fr.pot - bets)} BB`));
+  if (bets > 0) bd.appendChild(el("small", "pt", `ベット込み ${f(fr.pot)} BB`));
   bd.appendChild(el("small", "lv", `Lv${H.lv}（${H.sb}/${H.bb} ante ${H.an}）`));
   mid.appendChild(bd);
   tb.appendChild(mid);

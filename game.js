@@ -164,6 +164,11 @@ function tableHtml(seats, center) {
     `<div class="mid">${center}</div>`
   );
 }
+// 真ん中のポット表示。POT は前のストリートまでに集まった額（アンティ込み）で、このストリートのベットは含めない
+// （ベット額がポットの何%かを見て取れるように）。ベットが出ている間は、ベット込みの合計も小さく添える
+function potHtml(total, bets, f) {
+  return `<span>POT ${f(total - bets)} BB</span>` + (bets > 0 ? `<small class="pt">ベット込み ${f(total)} BB</small>` : "");
+}
 // 席の並びを、me が先頭になるように回す（並びの順＝時計回りの順はそのまま）
 const fromMe = (list, isMe) => {
   const i = list.findIndex(isMe);
@@ -217,12 +222,13 @@ function render() {
       me: p.hero,
       bet: p.bet ? fb(p.bet) : 0,
     });
-  const pot = (T.ps || []).reduce((s, p) => s + p.tot, 0);
+  const pot = (T.ps || []).reduce((s, p) => s + p.tot, 0),
+    bets = (T.ps || []).reduce((s, p) => s + (p.bet || 0), 0);
   // 席の順（T.p）で円に並べる。あなたを下に置き、そこから時計回り。バストしてまだ表示している人は最後に
   $("tb").className = "ring";
   $("tb").innerHTML = tableHtml(
     fromMe(T.p, (p) => p.hero).concat(T.gone || []).map(seat),
-    `<div class=bd>${(T.bd || []).map((c) => cd(c)).join("") || "&nbsp;"}<span>POT ${fb(pot)} BB</span></div>`,
+    `<div class=bd>${(T.bd || []).map((c) => cd(c)).join("") || "&nbsp;"}${potHtml(pot, bets, fb)}</div>`,
   );
   let c = "";
   if (G.req) {

@@ -104,7 +104,7 @@ function mpRender(v) {
   $("tb").className = "ring";
   $("tb").innerHTML = tableHtml(
     fromMe(v.pl, (p) => p.me).map(seat),
-    `<div class=bd>${v.bd.map((c) => cd(c)).join("") || "&nbsp;"}<span>POT ${f(v.pot)} BB</span></div>`,
+    `<div class=bd>${v.bd.map((c) => cd(c)).join("") || "&nbsp;"}${potHtml(v.pot, v.pl.reduce((s, p) => s + (p.bet || 0), 0), f)}</div>`,
   );
   const q = v.req;
   MP.rt = q ? Date.now() + q.rem : 0;
