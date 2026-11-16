@@ -9,6 +9,9 @@
     <style>
       .bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0; }
       .bar select { max-width: 100%; }
+      /* 大会の選択は、長い項目でも画面の幅に収める（スマホで横にはみ出さない） */
+      .bar label { display: flex; align-items: center; gap: 4px; max-width: 100%; }
+      .bar label select { flex: 1; min-width: 0; }
       #cap { text-align: center; font-weight: 700; min-height: 1.4em; margin: 8px 0 0; }
       #cnt { color: var(--mu); font-size: 13px; }
       .flt label { margin-right: 10px; font-size: 13px; white-space: nowrap; }

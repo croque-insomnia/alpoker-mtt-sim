@@ -81,9 +81,7 @@ function mpRender(v) {
   if (G.ty === undefined) G.ty = ls();
   const f = (x) => +(x / v.bb).toFixed(1);
   G.lvEnd = Date.now() + v.rem;
-  const hs =
-    `<b>Lv${v.lv + 1}</b>（BB=${v.bb}点・ante ${+(v.an / v.bb).toFixed(2)}BB） ・ 次Lvまで <b id=tm></b> ・ 残り <b>${v.al}</b>/${v.en}人 ・ ITM ${v.itm}位 ・ 平均 ${f(v.avg)}BB` +
-    (v.spec ? " ・ <b>観戦中</b>" : ` ・ あなた <b>${v.rk}位</b>（${f(v.st)}BB）${v.re ? " ・ <b>RE可</b>" : ""}`);
+  const hs = hdHtml({ lv: v.lv, bb: v.bb, an: v.an, al: v.al, en: v.en, itm: v.itm, avg: f(v.avg), rk: v.rk, st: f(v.st), re: v.re, spec: v.spec });
   if (G.hs != hs) {
     G.hs = hs;
     $("hd").innerHTML = hs;
@@ -123,16 +121,8 @@ function mpControls(v, f) {
     const mn = Math.min(q.cur + q.minR, q.mx);
     MP.mn = MP.rx = mn;
     MP.mx = q.mx;
-    c = `<div class=mu>残り <b id=rtv></b> 秒</div>`;
-    c += q.toCall
-      ? `<button class=g onclick="MA('f')">フォールド</button><button onclick="MA('c')">コール ${f(Math.min(q.toCall, q.stack))}BB</button>`
-      : `<button onclick="MA('c')">チェック</button>`;
-    if (q.mx > q.cur) {
-      const pr = q.cur
-        ? [[2, "2x"], [2.5, "2.5x"], [3, "3x"]].map(([k, n]) => [Math.round(q.cur * k), n])
-        : [[1 / 3, "1/3 Pot"], [0.5, "1/2 Pot"], [1, "1 Pot"]].map(([k, n]) => [Math.round(q.pot * k), n]);
-      c += `<div class=rs><input id=sl type=range min=${mn} max=${q.mx} value=${mn} oninput="MX(this.value)"><button onclick="MA('r')">${q.cur ? "レイズ" : "ベット"} <span id=rv>${f(mn)}</span>BB</button></div><div>${pr.map(([x, n]) => `<button class=g onclick="MX(${x},1)">${n}</button>`).join("")}<button class=g onclick="MX(${q.mx},1)">All-in</button></div>`;
-    }
+    c = `<div class="mu">あなたの番です。残り <b id=rtv></b> 秒</div>`;
+    c += actHtml("MA", "MX", { toCall: q.toCall, call: f(Math.min(q.toCall, q.stack)), cur: q.cur, mn, mx: q.mx, pot: q.pot, f });
   }
   if (!q && v.ask)
     c = '<p>バストしました。リエントリー（開始スタック）しますか？</p><button onclick="MR(1)">リエントリー</button><button class=g onclick="MR(0)">終了</button>';
@@ -224,18 +214,28 @@ function mpAccount() {
     })
     .catch(() => {});
 }
+// 入力欄をラベルごと出す・隠す
+function mpField(id, on) {
+  const e = $(id), f = e.closest(".fld, .chk");
+  e.hidden = !on;
+  if (f) f.hidden = !on;
+}
 function mpMember(u) {
   MP.user = u;
   // 入室：名前もパスワードも要らない
-  $("mjn").hidden = $("mjp").hidden = true;
+  mpField("mjn", false);
+  mpField("mjp", false);
+  $("mjx").textContent = `ログイン中なので、名前とパスワードは要りません（${u.name} として入ります）。`;
   $("mjb").textContent = u.name + " として入室";
   // 部屋を作る：名前と合言葉は要らない。ゲストも入れるときだけ、ゲスト用のパスワードを決める
-  $("mhn").hidden = $("mhk").hidden = true;
-  $("mhg").parentNode.hidden = false;
-  const sync = () => ($("mhp").hidden = !$("mhg").checked);
+  mpField("mhn", false);
+  mpField("mhk", false);
+  mpField("mhg", true);
+  $("mhpL").textContent = "ゲスト用のパスワード（ゲストに伝える）";
+  const sync = () => mpField("mhp", $("mhg").checked);
   $("mhg").onchange = sync;
   sync();
-  $("mhp").placeholder = "ゲスト用のパスワード（ゲストに伝える）";
+  $("mhx").textContent = "ログイン中なので、合言葉は要りません。ゲストも入れるときだけ、ゲスト用のパスワードを決めます。";
   $("mhb").textContent = u.name + " として部屋を作る";
 }
 function mpUI() {
@@ -243,12 +243,40 @@ function mpUI() {
     HM = qs.has("host"),
     RM = qs.get("r"),
     err = (s) => ($("mpM").textContent = s || "");
+  // 「部屋に入る」「部屋を作る」をタブで切り替える。入力欄にはラベルを付ける（入力したあとも、何の欄か分かるように）
   $("mp").innerHTML = `<h3 style="margin-top:0">みんなで遊ぶ</h3><div id="mpE">
-<div id="mpH" ${HM ? "" : "hidden"}><input id="mhn" type="text" maxlength="12" placeholder="プレイヤー名"><input id="mhp" type="password" placeholder="パスワード（参加者に伝える）"><input id="mhk" type="password" placeholder="部屋を作る合言葉" hidden><label hidden><input id="mhg" type="checkbox"> ゲスト（ログインしていない人）も入れる</label><p>ブラインド間隔：<select id="mps"><option value="5">5分（標準）</option><option value="2">2分</option><option value="1">1分</option></select></p><button id="mhb">部屋を作る</button><p class="mu"><a href="?">入室する側はこちら</a></p></div>
-<div id="mpJ" ${HM ? "hidden" : ""}><input id="mjr" type="text" placeholder="部屋ID（例: alp-xxxxx）"><input id="mjn" type="text" maxlength="12" placeholder="プレイヤー名"><input id="mjp" type="password" placeholder="パスワード"><label><input type="radio" name="mro" value="player" checked> プレイヤー</label> <label><input type="radio" name="mro" value="spec"> 観戦</label><br><button id="mjb">入室</button><p class="mu"><a href="?host">部屋を作る側はこちら</a></p></div>
+<p class="tabs2"><button id="mtJ" type="button">部屋に入る</button><button id="mtH" type="button">部屋を作る</button></p>
+<div id="mpJ">
+<p class="mu" id="mjx">部屋を作った人から、招待URL（または部屋ID）とパスワードを聞いてください。</p>
+<label class="fld"><span>部屋ID</span><input id="mjr" type="text" placeholder="例: alp-xxxxx（招待URLを開くと自動で入ります）"></label>
+<label class="fld"><span>あなたの名前</span><input id="mjn" type="text" maxlength="12" placeholder="12文字まで"></label>
+<label class="fld"><span>部屋のパスワード</span><input id="mjp" type="password" placeholder="部屋を作った人から聞いたもの"></label>
+<p class="fld">参加のしかた：<label><input type="radio" name="mro" value="player" checked> プレイヤーとして</label> <label><input type="radio" name="mro" value="spec"> 観戦だけ</label></p>
+<button id="mjb">入室</button>
+</div>
+<div id="mpH">
+<p class="mu" id="mhx">部屋を作って、招待URLとパスワードを仲間に伝えます。</p>
+<label class="fld"><span>あなたの名前</span><input id="mhn" type="text" maxlength="12" placeholder="12文字まで"></label>
+<label class="fld"><span id="mhpL">部屋のパスワード（参加する人に伝える）</span><input id="mhp" type="password"></label>
+<label class="fld" hidden><span>部屋を作る合言葉（管理者から聞いたもの）</span><input id="mhk" type="password" hidden></label>
+<label class="chk" hidden><input id="mhg" type="checkbox"> ゲスト（ログインしていない人）も入れる</label>
+<label class="fld"><span>ブラインド間隔</span><select id="mps"><option value="5">5分（標準）</option><option value="2">2分</option><option value="1">1分</option></select></label>
+<button id="mhb">部屋を作る</button>
+</div>
 <p id="mpM" class="err"></p></div>
 <div id="mpRm" hidden><div id="mpI"></div><h4>参加者</h4><ul id="mpR" style="padding-left:20px"></ul><div id="mpC"></div><p id="mpS" class="ok"></p></div>
-<p id="mpBk"><a href="${location.pathname}">ひとりで遊ぶに戻る</a></p>`;
+<p id="mpBk"><a href="${location.pathname}">← トップに戻る</a></p>`;
+  // タブ：?host なら「部屋を作る」から
+  const tab = (host) => {
+    $("mpH").hidden = !host;
+    $("mpJ").hidden = host;
+    $("mtH").className = host ? "on" : "g";
+    $("mtJ").className = host ? "g" : "on";
+    $("mpM").textContent = "";
+  };
+  $("mtJ").onclick = () => tab(false);
+  $("mtH").onclick = () => tab(true);
+  tab(HM);
   if (RM) $("mjr").value = RM;
   if (HM || RM) {
     $("mp").hidden = 0;
@@ -261,7 +289,8 @@ function mpUI() {
   SRV.then((s) => {
     if (!s) return;
     Net.use(wsLink(location.href));
-    $("mhk").hidden = !s.needKey;
+    if (!MP.user) mpField("mhk", !!s.needKey);
+    if (s.needKey) $("mhx").textContent = "部屋を作るには、管理者から聞いた「部屋を作る合言葉」が必要です（ログインしていれば要りません）。";
     if (s.auth) MP.acct = mpAccount();
   });
   // 招待用の表示（部屋IDと招待URL）

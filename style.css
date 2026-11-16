@@ -197,3 +197,50 @@ input[type="text"], input[type="password"] { display: block; width: 100%; font: 
 .ok { color: #2f6b50; }
 .tag { font-size: 12px; padding: 1px 6px; border: 1px solid var(--bd); border-radius: 6px; margin-left: 6px; color: var(--mu); }
 code { background: rgba(127, 127, 127, 0.15); padding: 1px 5px; border-radius: 4px; }
+/* hidden を付けた要素は、上の display 指定（入力欄の display: block など）より優先して隠す */
+[hidden] {
+  display: none !important;
+}
+
+/* ---- トップ画面 ---- */
+.lead { margin-top: 0; }
+.acct { font-size: 13px; color: var(--mu); }
+.menu { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; margin: 12px 0; }
+button.big { margin: 0; padding: 14px 12px; text-align: left; display: flex; flex-direction: column; gap: 2px; }
+button.big b { font-size: 17px; }
+button.big small { font-size: 12px; opacity: 0.8; }
+.opt { font-size: 14px; }
+details.rules { font-size: 13px; color: var(--mu); margin: 8px 0; }
+details.rules summary { cursor: pointer; }
+
+/* ---- みんなで遊ぶ：入室・部屋作り ---- */
+.tabs2 { display: flex; gap: 6px; margin: 0 0 8px; }
+.tabs2 button { flex: 1; margin: 0; }
+.tabs2 button.on { outline: 2px solid var(--ac); outline-offset: 1px; }
+label.fld { display: block; margin: 8px 0; font-size: 13px; color: var(--mu); }
+label.fld input, label.fld select { margin-top: 3px; color: var(--tx); }
+label.fld select { display: block; }
+p.fld { font-size: 14px; }
+label.chk { display: block; margin: 8px 0; }
+
+/* ---- ゲーム画面：上の情報 ---- */
+#hd { min-height: 0; }
+.hdg { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 6px; }
+.hb { border: 1px solid var(--bd); border-radius: 8px; padding: 4px 8px; line-height: 1.3; }
+.hb small { display: block; font-size: 11px; color: var(--mu); }
+.hb b { display: block; font-size: 16px; color: var(--tx); }
+.hb span { display: block; font-size: 11px; color: var(--mu); }
+.hb.me { border-color: var(--ac); }
+
+/* ---- ゲーム画面：自分の番の操作 ---- */
+#ct { margin-top: 10px; }
+.acts { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+.acts button { margin: 0; min-width: 104px; padding: 11px 14px; }
+.rz { margin: 10px auto 0; max-width: 420px; padding: 8px; border: 1px dashed var(--bd); border-radius: 8px; }
+.rz input[type="range"] { width: 100%; }
+.pre { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; }
+.pre button { margin: 0; padding: 6px 10px; font-size: 13px; }
+
+/* ---- ゲーム画面：下の帯（CPUのタイプ・ハンド履歴） ---- */
+.foot { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; font-size: 13px; color: var(--mu); margin-bottom: 10px; }
+.foot button { padding: 6px 10px; font-size: 13px; }

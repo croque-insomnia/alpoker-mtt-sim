@@ -115,6 +115,44 @@ function fin() {
   $("ov").innerHTML =
     `<h2 style="margin-top:0">${pl == 1 ? "🏆 優勝！" : pl + "位 でフィニッシュ"}</h2><p>${pl <= itm() ? "ITM（入賞）" : "ITM圏外"}${pl <= 5 ? "／ファイナルテーブル" : ""}　エントリー ${G.entries}人（あなたのリエントリー ${h.re}回）</p><p style="color:var(--mu)">参考：サーキットpt（仮配点）${pt}pt／通算 ${S.n}回・優勝${S.w}・FT${S.ft}・ITM${S.itm}</p><button onclick="location.reload()">もう一度</button>`;
 }
+// ---- 画面の部品（ひとり用・みんなで遊ぶで共通）----
+// 上の情報：小さな枠ごとに並べる。o の値はすべて数（HTML に入れても安全）
+//   { lv: レベルの番号(0〜), bb, an, al: 残り人数, en: エントリー数, itm: 入賞の順位, avg: 平均(BB), rk: 順位, st: スタック(BB), re: リエントリーできる, spec: 観戦中 }
+function hdHtml(o) {
+  const box = (label, main, sub, cls) => `<div class="hb${cls ? " " + cls : ""}"><small>${label}</small><b>${main}</b>${sub ? `<span>${sub}</span>` : ""}</div>`;
+  return (
+    `<div class="hdg">` +
+    box("レベル", `Lv${o.lv + 1}`, `BB ${o.bb}・ante ${+(o.an / o.bb).toFixed(2)}BB`) +
+    `<div class="hb"><small>次のレベルまで</small><b id=tm></b></div>` +
+    box("残り", `${o.al}人`, `エントリー ${o.en}`) +
+    box("入賞", `${o.itm}位まで`) +
+    box("平均", `${o.avg}BB`) +
+    (o.spec ? box("あなた", "観戦中", "", "me") : box("あなた", `${o.rk}位`, `${o.st}BB${o.re ? "・リエントリー可" : ""}`, "me")) +
+    `</div>`
+  );
+}
+// 自分の番の操作欄。A: 行動を送る関数の名前、X: レイズ額を動かす関数の名前（ひとり用は A / X、みんなで遊ぶは MA / MX）
+//   o: { toCall, call: コールの額(BB), cur, mn: 最小のレイズ額, mx: 最大（オールイン）, pot, f: 点 → BB }
+// 1段目に「フォールド・コール（チェック）・レイズ」を並べ、2段目にレイズ額（スライダーとよく使う額）をまとめる
+function actHtml(A, X, o) {
+  const raise = o.mx > o.cur, word = o.cur ? "レイズ" : "ベット";
+  let c = `<div class="acts">`;
+  c += o.toCall
+    ? `<button class=g onclick="${A}('f')">フォールド</button><button onclick="${A}('c')">コール ${o.call}BB</button>`
+    : `<button onclick="${A}('c')">チェック</button>`;
+  if (raise) c += `<button class="rb" onclick="${A}('r')">${word} <b id=rv>${o.f(o.mn)}</b>BB</button>`;
+  c += `</div>`;
+  if (raise) {
+    const pr = o.cur
+      ? [[2, "2倍"], [2.5, "2.5倍"], [3, "3倍"]].map(([k, n]) => [Math.round(o.cur * k), n])
+      : [[1 / 3, "ポットの1/3"], [0.5, "ポットの1/2"], [1, "ポット"]].map(([k, n]) => [Math.round(o.pot * k), n]);
+    c +=
+      `<div class="rz"><div class="mu">${word}額を選ぶ（${o.f(o.mn)}〜${o.f(o.mx)}BB）</div>` +
+      `<input id=sl type=range min=${o.mn} max=${o.mx} value=${o.mn} oninput="${X}(this.value)">` +
+      `<div class="pre">${pr.map(([x, n]) => `<button class=g onclick="${X}(${x},1)">${n}</button>`).join("")}<button class=g onclick="${X}(${o.mx},1)">オールイン</button></div></div>`;
+  }
+  return c;
+}
 function render() {
   const T = G.T,
     h = G.hero,
@@ -122,7 +160,7 @@ function render() {
     [sb, bb, an] = LV[G.lv];
   const rk = [...al].sort((a, b) => b.stack - a.stack).indexOf(h) + 1,
     avg = Math.round(al.reduce((s, p) => s + p.stack, 0) / Math.max(1, al.length));
-  const hs = `<b>Lv${G.lv + 1}</b>（BB=${bb}点・ante ${+(an / bb).toFixed(2)}BB） ・ 次Lvまで <b id=tm></b> ・ 残り <b>${al.length}</b>/${G.entries}人 ・ ITM ${itm()}位 ・ 平均 ${fb(avg)}BB ・ あなた <b>${rk}位</b>（${fb(h.stack)}BB）${G.lv < 2 && !h.re ? " ・ <b>RE可</b>" : ""}`;
+  const hs = hdHtml({ lv: G.lv, bb, an, al: al.length, en: G.entries, itm: itm(), avg: fb(avg), rk, st: fb(h.stack), re: G.lv < 2 && !h.re });
   if (G.hs != hs) {
     G.hs = hs;
     $("hd").innerHTML = hs;
@@ -146,29 +184,7 @@ function render() {
     G.rx = G.rx0 = mn;
     G.mn = mn;
     G.mx = mx;
-    c = q.toCall
-      ? `<button class=g onclick="A('f')">フォールド</button><button onclick="A('c')">コール ${fb(Math.min(q.toCall, p.stack))}BB</button>`
-      : `<button onclick="A('c')">チェック</button>`;
-    if (mx > q.cur)
-      c +=
-        `<div class=rs><input id=sl type=range min=${mn} max=${mx} value=${mn} oninput="X(this.value)"><button onclick="A('r')">${q.cur ? "レイズ" : "ベット"} <span id=rv>${fb(mn)}</span>BB</button></div><div>` +
-        (q.cur
-          ? [
-              [2, "2x"],
-              [2.5, "2.5x"],
-              [3, "3x"],
-            ].map(
-              ([f, n]) => `<button class=g onclick="X(${Math.round(q.cur * f)},1)">${n}</button>`,
-            )
-          : [
-              [1 / 3, "1/3 Pot"],
-              [0.5, "1/2 Pot"],
-              [1, "1 Pot"],
-            ].map(
-              ([f, n]) => `<button class=g onclick="X(${Math.round(q.pot * f)},1)">${n}</button>`,
-            )
-        ).join("") +
-        `<button class=g onclick="X(${mx},1)">All-in</button></div>`;
+    c = actHtml("A", "X", { toCall: q.toCall, call: fb(Math.min(q.toCall, p.stack)), cur: q.cur, mn, mx, pot: q.pot, f: fb });
   } else if (G.ask)
     c =
       '<p>バストしました。リエントリー（開始スタック）しますか？</p><button onclick="reent()">リエントリー</button><button class=g onclick="fin()">終了</button>';
