@@ -1148,6 +1148,113 @@ function analyzeRows(counts) {
   const v = (n, d) => (counts[d] > 0 ? (counts[n] || 0) / counts[d] : null);
   return ME_ROWS.map(([name, n, d, r]) => ({ name, key: n + "/" + d, kind: r, value: v(n, d), count: Math.round(counts[d] || 0) }));
 }
+// 1ハンドの見出し用の情報（振り返り・見返すページの一覧と絞り込みに使う）。oid の人が配られていなければ null
+//   { i: 席の番号, seat, pos: 位置, net: 増減（BB）, vp: 自分から参加した, ai: オールインした, big: ポットが 20BB 以上, sd: ショーダウンまで行った }
+function handInfo(H, oid) {
+  const i = (H.seats || []).findIndex((s) => s.oid === oid), s = H.seats && H.seats[i];
+  if (!s) return null;
+  const mine = (H.acts || []).filter((a) => a.i === i);
+  return {
+    i,
+    seat: s,
+    pos: posName(i, H.seats.length),
+    net: (s.end - s.st) / (H.bb || 1),
+    vp: mine.some((a) => a.s === 0 && (a.a === "r" || a.a === "b" || (a.a === "c" && a.x > 0))),
+    ai: mine.some((a) => a.ai),
+    big: (H.win || []).reduce((x, w) => x + w.x, 0) >= 20 * (H.bb || 1),
+    sd: (H.sd || []).some((x) => x.i === i),
+  };
+}
+// ---- 再生：1ハンドを、卓の絵の「コマ」の並びにする（hands.html が使う）----
+// コマ = { cap: 説明, street: 0/3/4/5, board: そのときのボード, pot: ポット（このストリートのベットも含む。ゲーム画面の POT と同じ）,
+//          seats: [{ stack, bet: このストリートで出した額, fold, allin, act: 直前の行動の言葉, open: 手札が表になっているか }],
+//          actor: 行動した席（なければ -1） }
+// 手札が表になるのは、ショーダウン、またはもう誰も打てなくなったとき（オールインで決着がつくとき）。履歴の shown に合わせる
+function replayFrames(H) {
+  const seats = H.seats || [], n = seats.length, bb = H.bb || 1,
+    f = (x) => +(x / bb).toFixed(1),
+    A = { f: "フォールド", k: "チェック", c: "コール", b: "ベット", r: "レイズ" },
+    ST = { 0: "プリフロップ", 3: "フロップ", 4: "ターン", 5: "リバー" };
+  const P = seats.map((s) => ({ stack: s.st, bet: 0, tot: 0, fold: 0, allin: 0, act: null, open: 0 }));
+  const put = (p, x) => {
+    x = Math.min(x, p.stack);
+    p.stack -= x;
+    p.bet += x;
+    p.tot += x;
+    if (!p.stack) p.allin = 1;
+  };
+  let street = 0, revealed = false;
+  const frames = [];
+  const snap = (cap, actor = -1) =>
+    frames.push({
+      cap,
+      street,
+      board: (H.bd || []).slice(0, street),
+      pot: P.reduce((x, p) => x + p.tot, 0),
+      seats: P.map((p) => ({ stack: p.stack, bet: p.bet, fold: p.fold, allin: p.allin, act: p.act, open: p.open })),
+      actor,
+    });
+  // もう誰も打てない（降りていない人のうち、打てる人が1人以下）なら、表になる手札を開く
+  const maybeReveal = () => {
+    const live = P.filter((p) => !p.fold);
+    if (revealed || live.length < 2 || live.filter((p) => !p.allin).length > 1) return;
+    revealed = true;
+    seats.forEach((s, i) => s.shown && !P[i].fold && (P[i].open = 1));
+  };
+  // アンティとブラインド
+  P.forEach((p) => {
+    const x = Math.min(H.an || 0, p.stack);
+    p.stack -= x;
+    p.tot += x;
+    if (!p.stack) p.allin = 1;
+  });
+  if (n >= 2) {
+    const s0 = n == 2 ? 0 : 1, b0 = n == 2 ? 1 : 2;
+    put(P[s0], H.sb || 0);
+    put(P[b0], bb);
+  }
+  snap(`配札（SB ${f(H.sb || 0)} / BB 1 / アンティ ${f(H.an || 0)}BB）`);
+  const newStreet = (k) => {
+    P.forEach((p) => {
+      p.bet = 0;
+      p.act = null;
+    });
+    street = k;
+    snap(`${ST[k]}`);
+  };
+  for (const a of H.acts || []) {
+    if (a.s != street) newStreet(a.s);
+    const p = P[a.i];
+    if (!p) break;
+    if (a.a == "f") p.fold = 1;
+    else put(p, a.x);
+    p.act = A[a.a] + (a.a == "c" ? " " + f(a.x) : a.a == "b" || a.a == "r" ? " " + f(a.to) : "") + (a.ai ? "（オールイン）" : "");
+    snap(`${seats[a.i].name} ${p.act}`, a.i);
+    maybeReveal();
+  }
+  // 誰も打たないまま進んだストリート（オールインのあと）
+  for (const k of [3, 4, 5]) if ((H.bd || []).length >= k && k > street) newStreet(k);
+  // ショーダウン
+  if ((H.sd || []).length) {
+    P.forEach((p) => (p.act = null));
+    for (const x of H.sd) if (P[x.i]) (P[x.i].open = 1), (P[x.i].act = x.r);
+    snap("ショーダウン");
+  }
+  // 獲得：スタックを終了時に合わせる
+  P.forEach((p, i) => {
+    p.stack = seats[i].end;
+    p.bet = 0;
+    p.tot = 0;
+  });
+  const won = {};
+  for (const w of H.win || []) {
+    const sh = Math.floor(w.x / w.w.length);
+    w.w.forEach((i, k) => (won[i] = (won[i] || 0) + sh + (k == 0 ? w.x - sh * w.w.length : 0)));
+  }
+  P.forEach((p, i) => (p.act = won[i] ? `+${f(won[i])} 獲得` : p.act));
+  snap((H.win || []).map((w) => `${w.w.map((i) => seats[i].name).join("・")} が ${f(w.x)}BB 獲得`).join(" / ") || "終了");
+  return frames;
+}
 // 時間が来ていればレベルを上げる
 function advanceLevel(g, now) {
   while (now >= g.lvEnd && g.lv < LV.length - 1) {
@@ -1288,7 +1395,7 @@ const api = {
   R, SU, RK, LV, CPU0, TY, TYC, NM, NC, HN, REC_KEYS, BIGZ, MEMK, MEK, ME_DECAY, ME_PRIOR, ME_ROWS,
   fromType, shf, alive, itm, cd, e5, best, hcls, pre, draw, tier, track, newObs, obs, ai2,
   hand, bust, bal, advanceLevel, autoAct, playHand, soloSetup, loadMem, saveMem, meBlend, meStats,
-  histView, histText, cardText, fileStamp, analyze, analyzeRows, posName,
+  histView, histText, cardText, fileStamp, analyze, analyzeRows, posName, replayFrames, handInfo,
 };
 if (typeof module == "object" && module.exports) module.exports = api;
 else root.AlpEngine = api;
