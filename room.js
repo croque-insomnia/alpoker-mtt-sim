@@ -7,7 +7,7 @@
 (function (root) {
 "use strict";
 const E = typeof AlpEngine != "undefined" ? AlpEngine : require("./engine.js");
-const { LV, CPU0, TYC, NM, NC, fromType, shf, alive, itm, hand, bust, bal, advanceLevel, autoAct, playHand, loadMem, histView } = E;
+const { LV, CPU0, TYC, NM, NC, fromType, shf, alive, itm, hand, bust, bal, advanceLevel, autoAct, playHand, loadMem, histView, ringSeats } = E;
 const ACT_MS = 25000, // 1回の持ち時間。切れたらチェック（できなければフォールド）して離席扱いにする
   ASK_MS = 20000; // リエントリーを選ぶ時間
 const realClock = {
@@ -279,7 +279,8 @@ function createRoom(o) {
       st: play ? me.stack : 0,
       re: play && g.lv < 2 && !me.re ? 1 : 0,
       // 手札は「自分の手札」と「公開された手札」だけを入れる（他の人の手札は送らない）
-      pl: T.p.concat(T.gone || []).map((p) => ({
+      // 席は卓の絵の順（直前のハンドの席順。バストした人もその位置に残す）
+      pl: ringSeats(T.p, T.ps, T.gone).map((p) => ({
         name: p.name, col: p.col, ty: p.ty[0], stack: p.stack, bet: p.bet, fold: p.fold, lab: p.lab,
         alive: p.alive ? 1 : 0, me: p == me ? 1 : 0, act: T.req && T.req.p == p ? 1 : 0, hd: p.h ? 1 : 0,
         h: (p == me || p.show) && p.h ? p.h : null,

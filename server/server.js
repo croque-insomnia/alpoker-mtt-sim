@@ -30,7 +30,7 @@ const { createReview } = require("./review.js");
 const ROOT = path.join(__dirname, ".."),
   // 配信するファイル（これ以外は 404）
   FILES = { "/": "index.html", "/index.html": "index.html", "/style.css": "style.css", "/account.html": "account.html", "/review.html": "review.html", "/hands.html": "hands.html" };
-for (const f of ["engine.js", "room.js", "net.js", "game.js", "mp.js", "solo-sync.js", "account.js", "page.js", "review.js", "hands.js"]) FILES["/" + f] = f;
+for (const f of ["engine.js", "room.js", "net.js", "game.js", "mp.js", "solo-sync.js", "account.js", "page.js", "table.js", "review.js", "hands.js"]) FILES["/" + f] = f;
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8" };
 const IDLE_MS = 10 * 60e3, // 誰もいない部屋を片付けるまでの時間
   PING_MS = 25e3, // 生きているかの確認の間隔（スマホのスリープなどで切れた接続を見つける）

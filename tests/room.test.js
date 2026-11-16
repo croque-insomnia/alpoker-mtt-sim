@@ -2,6 +2,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const { createRoom, ACT_MS } = require("../room.js");
+const E = require("../engine.js");
 const { fakeClock } = require("./helpers.js");
 
 // 人間 nh 人＋観戦1人で大会を開き、人間役はランダムに打つ（放置・切断・戻るも混ぜる）
@@ -23,7 +24,7 @@ function play(nh, { afk = 0.05, leave = 0, back = 0.3, seed = 1, drop = [] } = {
       const g0 = room.state(), me = g0.P.find((p) => p.pid == id), T = g0.tables[m.v.ti];
       if (T)
         m.v.pl.forEach((p, i) => {
-          const real = T.p.concat(T.gone || [])[i];
+          const real = E.ringSeats(T.p, T.ps, T.gone)[i];
           if (real && p.name != real.name) problems.push("seat order " + id);
           if (p.h && real && real != me && !real.show) problems.push("leak " + real.name);
         });

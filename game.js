@@ -137,43 +137,7 @@ function hdHtml(o) {
     `</div>`
   );
 }
-// 席。o の文字（name・sub・lab）は HTML に入れて安全なもの（ひとり用は CPU の名前、みんなで遊ぶは mpClean 済み）
-//   o: { name, col: 名前の色, sub: タイプなどの小さな字, lab: "D SB" などの位置, stack: BB, cards: 手札の HTML, fold, act: 行動中, me, bet: BB（なければ 0） }
-// 位置は小さな印にする。降りた人は手札の代わりに「フォールド」と出す（自分の手札は残す）
-function seatHtml(o) {
-  const pos = String(o.lab || "")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((x) => `<i class="pos p${x}">${x}</i>`)
-    .join("");
-  const cards = o.fold && !o.me ? '<span class="fd">フォールド</span>' : o.cards || "&nbsp;";
-  return (
-    `<div class="s${o.fold ? " f" : ""}${o.act ? " a" : ""}${o.me ? " h" : ""}">` +
-    `<div class="sn"><b style="color:${o.col || "inherit"}">${o.name}</b>${pos}</div>` +
-    `${o.sub ? `<small>${o.sub}</small>` : ""}<div>${o.stack} BB</div><div class="hc">${cards}</div>` +
-    `<em>${o.bet ? o.bet + "BB" : ""}</em></div>`
-  );
-}
-// 卓：席を楕円に並べ、真ん中にボードとポット。seats は席の HTML を「下の真ん中（ふつうは自分）から時計回り」の順に
-function tableHtml(seats, center) {
-  const pos = AlpEngine.seatRing(seats.length);
-  return (
-    `<div class="felt"></div>` +
-    seats.map((h, k) => `<div class="seat" style="left:${pos[k].x}%;top:${pos[k].y}%">${h}</div>`).join("") +
-    `<div class="mid">${center}</div>`
-  );
-}
-// 真ん中のポット表示。POT は前のストリートまでに集まった額（アンティ込み）で、このストリートのベットは含めない
-// （ベット額がポットの何%かを見て取れるように）。ベットが出ている間は、ベット込みの合計も小さく添える
-function potHtml(total, bets, f) {
-  return `<span>POT ${f(total - bets)} BB</span>` + (bets > 0 ? `<small class="pt">ベット込み ${f(total)} BB</small>` : "");
-}
-// 席の並びを、me が先頭になるように回す（並びの順＝時計回りの順はそのまま）
-const fromMe = (list, isMe) => {
-  const i = list.findIndex(isMe);
-  return i > 0 ? list.slice(i).concat(list.slice(0, i)) : list;
-};
+// 席・卓の絵（seatHtml・tableHtml・fromMe）は table.js（見返すページと共通）
 // 自分の番の操作欄。A: 行動を送る関数の名前、X: レイズ額を動かす関数の名前（ひとり用は A / X、みんなで遊ぶは MA / MX）
 //   o: { toCall, call: コールの額(BB), cur, mn: 最小のレイズ額, mx: 最大（オールイン）, pot, f: 点 → BB }
 // 1段目に「フォールド・コール（チェック）・レイズ」を並べ、2段目にレイズ額（スライダーとよく使う額）をまとめる
@@ -224,10 +188,10 @@ function render() {
     });
   const pot = (T.ps || []).reduce((s, p) => s + p.tot, 0),
     bets = (T.ps || []).reduce((s, p) => s + (p.bet || 0), 0);
-  // 席の順（T.p）で円に並べる。あなたを下に置き、そこから時計回り。バストしてまだ表示している人は最後に
+  // 席の順に円に並べる。あなたを下に置き、そこから時計回り。バストしてまだ表示している人は、座っていた位置に（ringSeats）
   $("tb").className = "ring";
   $("tb").innerHTML = tableHtml(
-    fromMe(T.p, (p) => p.hero).concat(T.gone || []).map(seat),
+    fromMe(AlpEngine.ringSeats(T.p, T.ps, T.gone), (p) => p.hero).map(seat),
     `<div class=bd>${(T.bd || []).map((c) => cd(c)).join("") || "&nbsp;"}${potHtml(pot, bets, fb)}</div>`,
   );
   let c = "";

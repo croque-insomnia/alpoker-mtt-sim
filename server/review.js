@@ -19,8 +19,9 @@ function createReview({ auth, accounts, records, json, log }) {
     return !!(u && u.share && !u.disabled);
   };
   const sinceOf = (url) => {
+    // 日の単位に切り下げる（records.analyzeUser も同じ。応答の since を、実際に数えた範囲と合わせるため）
     const s = +url.searchParams.get("since");
-    return Number.isFinite(s) && s > 0 ? s : 0;
+    return Number.isFinite(s) && s > 0 ? Math.floor(s / DAY) * DAY : 0;
   };
   // 他の人を見るときは、続いているみんなで遊ぶ大会を数えない（大会中に隠れている手札の情報が、傾向の数の増え方から漏れるため）
   const style = (uid, since, done) => {
@@ -60,7 +61,8 @@ function createReview({ auth, accounts, records, json, log }) {
         // 身内CPUの材料：ひとり用の「あなたの傾向」のエクスポートと同じ形（all・recent・summary）に、位置別・深さ別を足す
         const src = ["mp", "solo"].includes(url.searchParams.get("src")) ? url.searchParams.get("src") : "all";
         const { all: allTime, recent } = records.profileOf(uid, { src, done, recentSince: Date.now() - 30 * DAY });
-        const ts = records.tournamentsOf(uid).filter((t) => src === "all" || t.source === src);
+        // 大会の数も、数えたハンドと同じ条件で（他の人なら、続いているみんなで遊ぶ大会は入れない）
+        const ts = records.tournamentsOf(uid).filter((t) => (src === "all" || t.source === src) && (!done || t.source === "solo" || t.finished || t.closed));
         const body = {
           format: "alpoker-profile",
           version: 1,
