@@ -1170,6 +1170,13 @@ function seatRing(n, rx = 37, ry = 37) {
   }
   return out;
 }
+// 卓の絵に並べる席の順。直前のハンドの席順（last＝T.ps）を土台にし、そのハンドでバストした人（gone）もその人の位置に残す
+// （バストした人を後ろに足すと、席の数と順が変わって全員の位置が動き、時計回り＝アクションの順も崩れるため）
+// 直前のハンドにいなかった人（ほかの卓から移ってきた人）は後ろに。seated＝今座っている人（T.p）
+function ringSeats(seated, last, gone) {
+  const g = gone || [], keep = new Set(seated.concat(g)), base = (last || []).filter((p) => keep.has(p)), inBase = new Set(base);
+  return base.concat(seated.filter((p) => !inBase.has(p)), g.filter((p) => !inBase.has(p)));
+}
 // 1ハンドの見出し用の情報（振り返り・見返すページの一覧と絞り込みに使う）。oid の人が配られていなければ null
 //   { i: 席の番号, seat, pos: 位置, net: 増減（BB）, vp: 自分から参加した, ai: オールインした, big: ポットが 20BB 以上, sd: ショーダウンまで行った }
 function handInfo(H, oid) {
@@ -1404,7 +1411,7 @@ const api = {
   R, SU, RK, LV, CPU0, TY, TYC, NM, NC, HN, REC_KEYS, BIGZ, MEMK, MEK, ME_DECAY, ME_PRIOR, ME_ROWS,
   fromType, shf, alive, itm, cd, e5, best, hcls, pre, draw, tier, track, newObs, obs, ai2,
   hand, bust, bal, advanceLevel, autoAct, playHand, soloSetup, loadMem, saveMem, meBlend, meStats,
-  histView, histText, cardText, fileStamp, analyze, analyzeRows, posName, replayFrames, handInfo, seatRing,
+  histView, histText, cardText, fileStamp, analyze, analyzeRows, posName, replayFrames, handInfo, seatRing, ringSeats,
 };
 if (typeof module == "object" && module.exports) module.exports = api;
 else root.AlpEngine = api;

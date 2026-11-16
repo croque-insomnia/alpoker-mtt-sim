@@ -181,3 +181,16 @@ test("他の人の傾向には、続いている大会を数えない（大会�
   const h = (await call(a, "api/review/hands?t=" + run.tid)).body;
   assert.deepEqual(Object.keys(h.tournament).sort(), ["blind_min", "closed", "entries", "finished", "finished_at", "id", "oid", "source", "started_at"]);
 });
+
+test("傾向の since は、実際に数えた範囲（日の単位に切り下げたもの）を返す。材料の大会の数も、数えたハンドと同じ条件で", async (t) => {
+  const { accounts, records, member, call } = await boot(t);
+  const a = member("Ayu"), b = member("Bo");
+  accounts.setShare(b.user.id, true);
+  const since = Date.now() - 30 * 864e5;
+  const r = (await call(a, "api/style?since=" + since)).body;
+  assert.equal(r.since, Math.floor(since / 864e5) * 864e5);
+  const run = mp(records, a, b, 4); // 続いている大会
+  assert.ok(!run.g.over);
+  assert.equal((await call(a, "api/style/profile?u=" + b.user.id)).body.tournaments, 0, "他の人から見ると、続いている大会は数えない");
+  assert.equal((await call(b, "api/style/profile")).body.tournaments, 1, "自分なら数える");
+});
