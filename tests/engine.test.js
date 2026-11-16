@@ -227,6 +227,9 @@ test("卓の絵の席順：バストした人は座っていた位置に残り�
     E.playHand(g, g.T);
     const last = g.T.ps.slice();
     E.bust(g, g.T);
+    // あなたがバストしたら、ゲームと同じくリエントリーさせる（0点のまま次のハンドに配られずに座り続けると、
+    // 直前のハンドにいない人として後ろに回るので、このあとの確かめが合わない。ゲームではリエントリーか終了を選ぶ）
+    if (g.hero.stack <= 0) g.hero.stack = 1e4;
     if (!g.T.gone.length) continue;
     const r = E.ringSeats(g.T.p, g.T.ps, g.T.gone);
     assert.deepEqual(r, last, "バストした人を含めて、直前のハンドと同じ並び");
