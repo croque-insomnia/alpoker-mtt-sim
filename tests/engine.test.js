@@ -237,3 +237,28 @@ test("卓の絵の席順：バストした人は座っていた位置に残り�
   }
   assert.fail("バストが起きなかった");
 });
+
+test("POT：ハンドが終わったらベットはポットに集まる。再生のどのコマでも POT（合計−ベット）は 0 以上、ショーダウンのコマではベットなし", () => {
+  let hands = 0;
+  for (let run = 0; run < 4; run++) {
+    const g = soloWithHistory(0);
+    for (let i = 0; i < 60 && g.T.p.filter((p) => p.stack > 0).length > 1; i++) {
+      E.playHand(g, g.T);
+      assert.equal(E.potOf(g.T.ps).bets, 0, "ハンドが終わったら、ベットは残らない");
+      E.bust(g, g.T);
+      if (g.hero.stack <= 0) g.hero.stack = 1e4;
+    }
+    for (const H of g.hist) {
+      const fr = E.replayFrames(H);
+      for (const f of fr) {
+        const { total, bets } = E.potOf(f.seats);
+        assert.equal(total, f.pot, `#${H.n} 合計`);
+        assert.ok(total - bets >= 0, `#${H.n} POT は 0 以上`);
+      }
+      const sd = fr.find((f) => f.cap === "ショーダウン");
+      if (sd) assert.equal(E.potOf(sd.seats).bets, 0, `#${H.n} ショーダウンのコマ`);
+      hands++;
+    }
+  }
+  assert.ok(hands > 50);
+});

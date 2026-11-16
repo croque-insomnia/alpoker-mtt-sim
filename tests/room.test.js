@@ -28,6 +28,14 @@ function play(nh, { afk = 0.05, leave = 0, back = 0.3, seed = 1, drop = [] } = {
           if (real && p.name != real.name) problems.push("seat order " + id);
           if (p.h && real && real != me && !real.show) problems.push("leak " + real.name);
         });
+      // POT：合計とベットは、同じ席の一覧（直前のハンドの席）から数えたもの。POT（合計−ベット）は 0 以上
+      // ハンドが終わっている（卓の進行がない）ときは、ベットはポットに集められている
+      if (T) {
+        const want = E.potOf(room.potSeats(T));
+        if (m.v.pot !== want.total || m.v.bets !== want.bets) problems.push("pot " + id);
+        if (m.v.pot - m.v.bets < 0) problems.push("negative pot " + id);
+        if (!T.g && m.v.bets) problems.push("bets after hand " + id);
+      }
     },
     members: () => ids.filter((i) => !gone.has(i)),
     clock,

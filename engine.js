@@ -853,6 +853,8 @@ function* hand(g, T, log) {
     yield* rnd(1);
     reveal();
   }
+  // ベットはもう起きない：最後のストリートのベットをポットに集める（画面の POT が、取られるポット全体になるように）
+  ps.forEach((p) => (p.bet = 0));
   const L = live(),
     sd = L.length > 1;
   if (sd)
@@ -1170,6 +1172,16 @@ function seatRing(n, rx = 37, ry = 37) {
   }
   return out;
 }
+// 卓のポット。seats（席の状態：tot＝このハンドで出した額、bet＝このストリートで出した額）から、合計とこのストリートのベットを数える
+// 画面の POT は total − bets（potHtml）。合計とベットを必ず同じ席の一覧から数えるため、サーバーの view と画面の両方がこれを使う
+function potOf(seats) {
+  let total = 0, bets = 0;
+  for (const p of seats || []) {
+    total += p.tot || 0;
+    bets += p.bet || 0;
+  }
+  return { total, bets };
+}
 // 卓の絵に並べる席の順。直前のハンドの席順（last＝T.ps）を土台にし、そのハンドでバストした人（gone）もその人の位置に残す
 // （バストした人を後ろに足すと、席の数と順が変わって全員の位置が動き、時計回り＝アクションの順も崩れるため）
 // 直前のハンドにいなかった人（ほかの卓から移ってきた人）は後ろに。seated＝今座っている人（T.p）
@@ -1195,8 +1207,9 @@ function handInfo(H, oid) {
   };
 }
 // ---- 再生：1ハンドを、卓の絵の「コマ」の並びにする（hands.html が使う）----
-// コマ = { cap: 説明, street: 0/3/4/5, board: そのときのボード, pot: ポット（このストリートのベットも含む。ゲーム画面の POT と同じ）,
-//          seats: [{ stack, bet: このストリートで出した額, fold, allin, act: 直前の行動の言葉, open: 手札が表になっているか }],
+// コマ = { cap: 説明, street: 0/3/4/5, board: そのときのボード, pot: 卓の合計（このストリートのベットも含む）。
+//            画面の POT は、ここからこのストリートのベットを引いたもの（potOf・potHtml。ゲーム画面と同じ）,
+//          seats: [{ stack, bet: このストリートで出した額, tot: このハンドで出した額, fold, allin, act: 直前の行動の言葉, open: 手札が表になっているか }],
 //          actor: 行動した席（なければ -1） }
 // 手札が表になるのは、ショーダウン、またはもう誰も打てなくなったとき（オールインで決着がつくとき）。履歴の shown に合わせる
 function replayFrames(H) {
@@ -1211,7 +1224,7 @@ function replayFrames(H) {
       street,
       board: (H.bd || []).slice(0, street),
       pot: P.reduce((x, p) => x + p.tot, 0),
-      seats: P.map((p) => ({ stack: p.stack, bet: p.bet, fold: p.fold, allin: p.allin, act: p.act, open: p.open })),
+      seats: P.map((p) => ({ stack: p.stack, bet: p.bet, tot: p.tot, fold: p.fold, allin: p.allin, act: p.act, open: p.open })),
       actor,
     });
   // もう誰も打てない（降りていない人のうち、打てる人が1人以下）なら、表になる手札を開く
@@ -1250,6 +1263,8 @@ function replayFrames(H) {
   maybeReveal();
   // 誰も打たないまま進んだストリート（オールインのあと）
   for (const k of [3, 4, 5]) if ((H.bd || []).length >= k && k > street) newStreet(k);
+  // ベットはもう起きない：ゲームと同じく、最後のストリートのベットをポットに集める
+  P.forEach((p) => (p.bet = 0));
   // ショーダウン
   if ((H.sd || []).length) {
     P.forEach((p) => (p.act = null));
@@ -1411,7 +1426,7 @@ const api = {
   R, SU, RK, LV, CPU0, TY, TYC, NM, NC, HN, REC_KEYS, BIGZ, MEMK, MEK, ME_DECAY, ME_PRIOR, ME_ROWS,
   fromType, shf, alive, itm, cd, e5, best, hcls, pre, draw, tier, track, newObs, obs, ai2,
   hand, bust, bal, advanceLevel, autoAct, playHand, soloSetup, loadMem, saveMem, meBlend, meStats,
-  histView, histText, cardText, fileStamp, analyze, analyzeRows, posName, replayFrames, handInfo, seatRing, ringSeats,
+  histView, histText, cardText, fileStamp, analyze, analyzeRows, posName, replayFrames, handInfo, seatRing, ringSeats, potOf,
 };
 if (typeof module == "object" && module.exports) module.exports = api;
 else root.AlpEngine = api;

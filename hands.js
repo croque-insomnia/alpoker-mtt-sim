@@ -145,7 +145,7 @@ function draw() {
   tb.className = "ring";
   tb.innerHTML = tableHtml(
     order,
-    `<div class="bd">${fr.board.length ? fr.board.map(card).join("") : "&nbsp;"}${potHtml(fr.pot, fr.seats.reduce((s, x) => s + (x.bet || 0), 0), f)}` +
+    `<div class="bd">${fr.board.length ? fr.board.map(card).join("") : "&nbsp;"}${potHtml(fr.pot, AlpEngine.potOf(fr.seats).bets, f)}` +
       `<small class="lv">${tblEsc(`Lv${H.lv}（${H.sb}/${H.bb} ante ${H.an}）`)}</small></div>`,
   );
   $("cap").textContent = fr.cap;

@@ -186,8 +186,7 @@ function render() {
       me: p.hero,
       bet: p.bet ? fb(p.bet) : 0,
     });
-  const pot = (T.ps || []).reduce((s, p) => s + p.tot, 0),
-    bets = (T.ps || []).reduce((s, p) => s + (p.bet || 0), 0);
+  const { total: pot, bets } = AlpEngine.potOf(T.ps);
   // 席の順に円に並べる。あなたを下に置き、そこから時計回り。バストしてまだ表示している人は、座っていた位置に（ringSeats）
   $("tb").className = "ring";
   $("tb").innerHTML = tableHtml(

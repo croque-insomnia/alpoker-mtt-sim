@@ -7,7 +7,7 @@
 (function (root) {
 "use strict";
 const E = typeof AlpEngine != "undefined" ? AlpEngine : require("./engine.js");
-const { LV, CPU0, TYC, NM, NC, fromType, shf, alive, itm, hand, bust, bal, advanceLevel, autoAct, playHand, loadMem, histView, ringSeats } = E;
+const { LV, CPU0, TYC, NM, NC, fromType, shf, alive, itm, hand, bust, bal, advanceLevel, autoAct, playHand, loadMem, histView, ringSeats, potOf } = E;
 const ACT_MS = 25000, // 1回の持ち時間。切れたらチェック（できなければフォールド）して離席扱いにする
   ASK_MS = 20000; // リエントリーを選ぶ時間
 const realClock = {
@@ -46,6 +46,9 @@ function createRoom(o) {
   // 席に着いていて、操作を待つ必要がある人間（離席中の人は自動で進める）
   const here = (p) => p.hero && p.alive && !p.away;
   const tlog = (t) => (s) => (t.lg ||= []).push(s);
+  // ポットを数える席：直前のハンドの席（T.ps）のうち、今もこの卓にいる人（バストした人も含む）
+  // （卓の組み替えでほかの卓へ移った人は、その卓で新しいハンドを打っているかもしれないので数えない）
+  const potSeats = (T) => (T.ps || []).filter((p) => T.p.includes(p) || (T.gone || []).includes(p));
 
   // players: [{ id, name, uid }]（人間のプレイヤー。順番どおりに番号を振る。uid はアカウントの ID、ゲストは null）
   // durMin: ブラインド間隔（分）
@@ -286,7 +289,8 @@ function createRoom(o) {
         h: (p == me || p.show) && p.h ? p.h : null,
       })),
       bd: T.bd || [],
-      pot: (T.ps || []).reduce((s, p) => s + p.tot, 0),
+      // 卓の合計と、このストリートのベット（同じ席の一覧から数える。画面の POT は pot − bets）
+      ...(({ total, bets }) => ({ pot: total, bets }))(potOf(potSeats(T))),
       lg: (T.lg || []).slice(-14),
       req: rq
         ? {
@@ -311,7 +315,7 @@ function createRoom(o) {
   }
 
   return {
-    start, msg, left, rejoin, push, view,
+    start, msg, left, rejoin, push, view, potSeats,
     started: () => !!g,
     state: () => g,
     stop: () => (stopped = true),
