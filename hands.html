@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="referrer" content="same-origin" />
+    <title>ハンドを見返す</title>
+    <link rel="stylesheet" href="style.css" />
+    <style>
+      .bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0; }
+      .bar select { max-width: 100%; }
+      /* 大会の選択は、長い項目でも画面の幅に収める（スマホで横にはみ出さない） */
+      .bar label { display: flex; align-items: center; gap: 4px; max-width: 100%; }
+      .bar label select { flex: 1; min-width: 0; }
+      #cap { text-align: center; font-weight: 700; min-height: 1.4em; margin: 8px 0 0; }
+      #cnt { color: var(--mu); font-size: 13px; }
+      .flt label { margin-right: 10px; font-size: 13px; white-space: nowrap; }
+      .s .ac { display: block; min-height: 1.2em; font-size: 12px; color: #ffd77a; }
+      pre.hx { white-space: pre-wrap; font-size: 13px; }
+      #rp button { min-width: 44px; }
+      .bd .lv { display: block; font-size: 11px; color: rgba(255, 255, 255, 0.6); }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div class="pn">
+        <h2 style="margin-top: 0">ハンドを見返す</h2>
+        <p id="msg" hidden></p>
+        <p><a href="./">ゲームに戻る</a>　<a href="review.html">振り返り・傾向</a></p>
+        <div id="pick" hidden>
+          <p class="bar"><label>大会 <select id="tsel"></select></label></p>
+          <p class="flt">
+            <label><input type="checkbox" id="fsd" /> ショーダウン</label>
+            <label><input type="checkbox" id="fai" /> 自分がオールイン</label>
+            <label><input type="checkbox" id="fbig" /> 大きなポット（20BB以上）</label>
+            <label><input type="checkbox" id="fvp" /> 自分から参加</label>
+            <label>位置 <select id="fpos"><option value="">すべて</option><option>D</option><option>SB</option><option>BB</option><option>UTG</option><option>CO</option></select></label>
+          </p>
+          <p class="bar">
+            <button class="g" id="hp">◀ 前のハンド</button>
+            <select id="hsel"></select>
+            <button class="g" id="hn">次のハンド ▶</button>
+          </p>
+          <p class="mu" id="note"></p>
+        </div>
+      </div>
+      <div id="rp" hidden>
+        <div id="tb"></div>
+        <p id="cap"></p>
+        <div class="pn">
+          <p class="bar">
+            <button class="g" id="f0" title="最初（Home）">⏮</button>
+            <button id="fp" title="前へ（←）">◀</button>
+            <button id="fn" title="次へ（→）">▶</button>
+            <button class="g" id="fe" title="最後（End）">⏭</button>
+            <button class="g" id="play">自動再生</button>
+            <span id="cnt"></span>
+          </p>
+          <p><label><input type="checkbox" id="all" /> 全員の手札を表示（そのとき見えていなかった手札も）</label></p>
+          <details>
+            <summary>テキストで見る</summary>
+            <pre class="hx" id="txt"></pre>
+          </details>
+        </div>
+      </div>
+    </div>
+    <script src="engine.js"></script>
+    <script src="page.js"></script>
+    <script src="hands.js"></script>
+  </body>
+</html>

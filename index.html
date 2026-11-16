@@ -11,44 +11,53 @@
       <div id="nb" class="pn err" hidden></div>
       <div id="mp" class="pn" hidden></div>
       <div id="start" class="pn">
-        <h2 style="margin-top: 0">5-Max MTT vs CPU</h2>
-        <p>
-          40人（あなた＋CPU39人・8卓）／開始10000点／ブラインド1〜13Lv／リエントリー1回（Lv1-2のみ）／ITM＝エントリー数の上位20%
-        </p>
-        <p>
-          CPUは7タイプ：タイト・ルースアグレ・コーラー・マニアック・バランス・ICM意識・ライト。自分以外の卓は、あなたの1ハンドごとに1ハンド進みます。
-        </p>
-        <p>
-          ネームドCPU（通常より強い）：<b style="color: #9acd32">Croque</b>／<b
-            style="color: #4fc3f7"
-            >Hubris</b
-          >／<b style="color: #ff8ac8">Kaina</b>。各35%の確率であなたと同卓します。
-        </p>
-        <p>
-          ブラインド間隔：<select id="spd">
+        <h2 style="margin-top: 0">5-Max MTT</h2>
+        <p class="lead">40人・8卓のポーカー・トーナメント。開始 10000点、入賞はエントリーの上位20%。</p>
+        <p id="acct" class="acct" hidden></p>
+        <div class="menu">
+          <button class="big" onclick="begin()"><b>ひとりで遊ぶ</b><small>CPU 39人とトーナメント</small></button>
+          <button class="big g" onclick="mpOpen()"><b>みんなで遊ぶ</b><small>部屋に入る・部屋を作る</small></button>
+          <button class="big g" id="hxb" onclick="location.href = 'hands.html'" hidden>
+            <b>ハンドを見返す</b><small>参加した大会を1手ずつ再生</small>
+          </button>
+        </div>
+        <p class="opt">
+          ひとりで遊ぶときのブラインド間隔：<select id="spd">
             <option value="5">5分（標準）</option>
             <option value="2">2分</option>
             <option value="1">1分</option>
           </select>
         </p>
-        <p id="st" style="color: var(--mu)"></p>
-        <p id="acct" class="mu" hidden></p>
+        <p id="st" class="mu"></p>
+        <details class="rules">
+          <summary>ルールと CPU について</summary>
+          <p>
+            40人（ひとりで遊ぶときは、あなた＋CPU39人）・8卓／開始10000点／ブラインド1〜13Lv／リエントリー1回（Lv1-2のみ）／入賞（ITM）＝エントリー数の上位20%
+          </p>
+          <p>
+            CPUは7タイプ：タイト・ルースアグレ・コーラー・マニアック・バランス・ICM意識・ライト。自分以外の卓は、あなたの1ハンドごとに1ハンド進みます。
+          </p>
+          <p>
+            ネームドCPU（通常より強い）：<b style="color: #9acd32">Croque</b>／<b style="color: #4fc3f7">Hubris</b>／<b
+              style="color: #ff8ac8"
+              >Kaina</b
+            >。各35%の確率であなたと同卓します。
+          </p>
+        </details>
         <div id="me"></div>
-        <button onclick="begin()">トーナメント開始</button>
-        <button class="g" onclick="mpOpen()">みんなで遊ぶ（入室）</button>
       </div>
       <div id="game" hidden>
         <div id="hd" class="pn"></div>
-        <label style="font-size: 13px; color: var(--mu); display: block; margin-bottom: 8px"
-          ><input type="checkbox" id="tyc" onchange="TY2(this.checked)" /> CPUタイプを表示</label
-        >
         <div id="tb"></div>
-        <div id="ct" class="pn" style="margin-top: 10px"></div>
+        <div id="ct" class="pn"></div>
         <div id="lg" class="pn"></div>
-        <p id="hx" style="font-size: 13px; color: var(--mu)">
-          ハンド履歴：<button class="g" onclick="HX('txt')">テキストで保存</button
-          ><button class="g" onclick="HX('json')">JSONで保存</button> <span id="hxm"></span>
-        </p>
+        <div class="foot">
+          <label><input type="checkbox" id="tyc" onchange="TY2(this.checked)" /> CPUのタイプを表示</label>
+          <span id="hx"
+            >ハンド履歴：<button class="g" onclick="HX('txt')">テキストで保存</button
+            ><button class="g" onclick="HX('json')">JSONで保存</button> <span id="hxm"></span
+          ></span>
+        </div>
       </div>
       <div id="ov" class="pn" hidden></div>
     </div>

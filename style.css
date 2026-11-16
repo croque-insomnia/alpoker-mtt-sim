@@ -7,6 +7,7 @@
   --bd: #c9d5cc;
   --ft: #2f6b50;
   --cd: #fff;
+  --er: #b3392b;
   box-sizing: border-box;
   padding-top: env(safe-area-inset-top, 0px);
   padding-bottom: env(safe-area-inset-bottom, 0px);
@@ -21,9 +22,11 @@
     --bd: #2a3d34;
     --ft: #1d4a37;
     --cd: #f4f4f0;
+    --er: #ff8f80;
   }
 }
 :root[data-theme="dark"] {
+  --er: #ff8f80;
   --bg: #0f1a17;
   --pn: #16251f;
   --tx: #e8efe9;
@@ -193,7 +196,125 @@ select {
 /* みんなで遊ぶ（ロビー） */
 input[type="text"], input[type="password"] { display: block; width: 100%; font: inherit; padding: 8px; margin: 6px 0; border: 1px solid var(--bd); border-radius: 8px; background: transparent; color: var(--tx); }
 .mu { color: var(--mu); font-size: 13px; }
-.err { color: #b3392b; }
+.err { color: var(--er); }
 .ok { color: #2f6b50; }
 .tag { font-size: 12px; padding: 1px 6px; border: 1px solid var(--bd); border-radius: 6px; margin-left: 6px; color: var(--mu); }
 code { background: rgba(127, 127, 127, 0.15); padding: 1px 5px; border-radius: 4px; }
+/* hidden を付けた要素は、上の display 指定（入力欄の display: block など）より優先して隠す */
+[hidden] {
+  display: none !important;
+}
+
+/* ---- トップ画面 ---- */
+.lead { margin-top: 0; }
+.acct { font-size: 13px; color: var(--mu); }
+.menu { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; margin: 12px 0; }
+button.big { margin: 0; padding: 14px 12px; text-align: left; display: flex; flex-direction: column; gap: 2px; }
+button.big b { font-size: 17px; }
+button.big small { font-size: 12px; opacity: 0.8; }
+.opt { font-size: 14px; }
+details.rules { font-size: 13px; color: var(--mu); margin: 8px 0; }
+details.rules summary { cursor: pointer; }
+
+/* ---- みんなで遊ぶ：入室・部屋作り ---- */
+.tabs2 { display: flex; gap: 6px; margin: 0 0 8px; }
+.tabs2 button { flex: 1; margin: 0; }
+.tabs2 button.on { outline: 2px solid var(--ac); outline-offset: 1px; }
+label.fld { display: block; margin: 8px 0; font-size: 13px; color: var(--mu); }
+label.fld input, label.fld select { margin-top: 3px; color: var(--tx); }
+label.fld select { display: block; }
+p.fld { font-size: 14px; }
+label.chk { display: block; margin: 8px 0; }
+
+/* ---- ゲーム画面：上の情報 ---- */
+#hd { min-height: 0; }
+.hdg { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 6px; }
+.hb { border: 1px solid var(--bd); border-radius: 8px; padding: 4px 8px; line-height: 1.3; }
+.hb small { display: block; font-size: 11px; color: var(--mu); }
+.hb b { display: block; font-size: 16px; color: var(--tx); }
+.hb span { display: block; font-size: 11px; color: var(--mu); }
+.hb.me { border-color: var(--ac); }
+
+/* ---- ゲーム画面：自分の番の操作 ---- */
+#ct { margin-top: 10px; }
+.acts { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+.acts button { margin: 0; min-width: 104px; padding: 11px 14px; }
+.rz { margin: 10px auto 0; max-width: 420px; padding: 8px; border: 1px dashed var(--bd); border-radius: 8px; }
+.rz input[type="range"] { width: 100%; }
+.pre { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; }
+.pre button { margin: 0; padding: 6px 10px; font-size: 13px; }
+
+/* ---- ゲーム画面：下の帯（CPUのタイプ・ハンド履歴） ---- */
+.foot { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; font-size: 13px; color: var(--mu); margin-bottom: 10px; }
+.foot button { padding: 6px 10px; font-size: 13px; }
+
+/* ---- 席：名前と位置の印・降りた人・ベット額 ---- */
+.s .sn { display: flex; align-items: center; justify-content: center; gap: 4px; flex-wrap: wrap; }
+.s small { display: block; }
+.pos { font-style: normal; font-size: 10px; font-weight: 700; line-height: 1; padding: 3px 5px; border-radius: 9px; background: rgba(255, 255, 255, 0.18); color: #fff; }
+.pos.pD { background: #f4f4f0; color: #111; } /* ディーラーボタン */
+.pos.pSB, .pos.pBB { background: rgba(224, 180, 76, 0.35); color: #ffe6a8; }
+.s .hc { min-height: 30px; display: flex; align-items: center; justify-content: center; }
+.s .fd { font-size: 12px; opacity: 0.9; letter-spacing: 0.05em; }
+.s em { display: inline-block; min-height: 1.2em; }
+.s em:not(:empty) { margin-top: 3px; padding: 0 8px; border-radius: 10px; background: rgba(0, 0, 0, 0.35); color: #ffd77a; font-weight: 700; }
+
+/* ---- 操作：コールは塗り、レイズは枠（見分けやすく）・自分の番の残り時間 ---- */
+.acts button.rb { background: transparent; color: var(--tx); border: 2px solid var(--ac); }
+.turn { font-size: 15px; font-weight: 700; color: var(--ac); margin-bottom: 6px; }
+.turn.warn { color: var(--er); }
+
+/* ---- 終わったときの知らせ：画面の真ん中に重ねる（スマホで下まで探さなくていいように） ---- */
+#ov:not([hidden]) {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(92vw, 520px);
+  max-height: 90vh;
+  overflow: auto;
+  z-index: 10;
+  margin: 0;
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.55);
+}
+
+/* 卓：席を楕円に並べる（下の真ん中があなた、そこから時計回り＝アクションの順） */
+#tb.ring {
+  position: relative;
+  height: clamp(400px, 70vw, 480px);
+  padding: 0;
+  background: transparent;
+}
+#tb.ring .felt {
+  position: absolute;
+  inset: 12% 9%;
+  border-radius: 50%;
+  background: var(--ft);
+  box-shadow: inset 0 0 0 5px rgba(0, 0, 0, 0.22), 0 0 0 5px #5b3d24, 0 4px 18px rgba(0, 0, 0, 0.35);
+}
+#tb.ring .seat {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: min(118px, 29vw);
+  z-index: 1;
+}
+#tb.ring .s {
+  min-width: 0;
+  width: 100%;
+  padding: 4px 4px 5px;
+  font-size: 12px;
+  background: #1b2a22;
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+#tb.ring .s.a { border-color: var(--ac); box-shadow: 0 0 0 2px var(--ac), 0 2px 10px rgba(0, 0, 0, 0.5); }
+#tb.ring .s.h { margin: 0; width: 100%; }
+#tb.ring .s.f { opacity: 0.5; }
+#tb.ring .mid {
+  position: absolute;
+  left: 50%;
+  top: 47%;
+  transform: translate(-50%, -50%);
+  width: 42%;
+}
+#tb.ring .bd { margin: 0; }

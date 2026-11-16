@@ -101,12 +101,14 @@ function createAuth(opt) {
   const ip = (req) => (trustProxy && String(req.headers["x-forwarded-for"] || "").split(",").pop().trim()) || req.socket.remoteAddress || "";
   // 回数制限：接続元ごとに1分あたり limit 回まで
   const hits = new Map();
-  const limited = (req, kind, limit) => {
-    const k = kind + "|" + ip(req), t = now(), h = hits.get(k);
+  // limit(key, n)：key（接続元・アカウントなど）ごとに1分あたり n 回まで。超えたら true
+  const limit = (k, n) => {
+    const t = now(), h = hits.get(k);
     if (hits.size > 2000) for (const [x, v] of hits) if (t - v.t > 60e3) hits.delete(x); // 古い記録を捨てる
     if (!h || t - h.t > 60e3) return hits.set(k, { t, n: 1 }), false;
-    return ++h.n > limit;
+    return ++h.n > n;
   };
+  const limited = (req, kind, n) => limit(kind + "|" + ip(req), n);
   // 書き込み系は、このサイトのページから来たものだけ受け付ける（別のサイトに仕込まれた送信を防ぐ）
   const sameOrigin = (req) => {
     const o = req.headers.origin;
@@ -348,7 +350,7 @@ function createAuth(opt) {
     return new Promise((resolve) => srv.listen(port, "127.0.0.1", () => resolve(srv)));
   }
 
-  return { handle, userFromReq, browserSid, browserUser, readerUser, startLocalAdmin, enabled: () => !!Object.keys(prov).length, providers: () => Object.keys(prov) };
+  return { handle, userFromReq, browserSid, browserUser, readerUser, limit, startLocalAdmin, enabled: () => !!Object.keys(prov).length, providers: () => Object.keys(prov) };
 }
 
 module.exports = { createAuth, parseCookies, PROVIDERS };

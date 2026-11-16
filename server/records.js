@@ -29,6 +29,40 @@ function openRecords(db) {
     soloMeta: db.prepare(`UPDATE tournaments SET entries = COALESCE(?, entries) WHERE id = ?`),
     soloEnd: db.prepare(`UPDATE tournaments SET finished = 1, finished_at = ? WHERE id = ? AND finished = 0`),
     soloEntryUpd: db.prepare(`UPDATE entries SET stats = ?, rebuys = ?, place = COALESCE(?, place), name = ? WHERE tournament_id = ? AND oid = 'hero'`),
+    // 読み出し（振り返り・傾向）
+    // done=1：続いているみんなで遊ぶ大会のハンドは入れない（他の人の傾向を見るとき。大会中に隠れている手札の情報を出さないため）
+    handsOf: db.prepare(
+      `SELECT h.data, t.source FROM hand_players hp JOIN hands h ON h.id = hp.hand_id JOIN tournaments t ON t.id = hp.tournament_id
+       WHERE hp.uid = @uid AND (@source IS NULL OR t.source = @source) AND (@since = 0 OR h.at >= @since)
+         AND (@done = 0 OR t.source = 'solo' OR t.finished = 1 OR t.closed = 1)
+       ORDER BY h.at, h.id`,
+    ),
+    // 傾向の覚えを使い回してよいかの目印：その人のハンドの数と、終わった・閉じた大会の数
+    sig: db.prepare(`SELECT (SELECT COUNT(*) FROM hand_players WHERE uid = ?) AS n, (SELECT COUNT(*) FROM tournaments WHERE finished = 1 OR closed = 1) AS d`),
+    tournamentsOf: db.prepare(
+      `SELECT t.id, t.source, t.room, t.started_at, t.finished_at, t.finished, t.closed, t.entries, t.blind_min,
+              e.oid, e.place, e.rebuys,
+              (SELECT COUNT(*) FROM hand_players hp WHERE hp.tournament_id = t.id AND hp.uid = e.uid) AS hands
+       FROM entries e JOIN tournaments t ON t.id = e.tournament_id
+       WHERE e.uid = ? ORDER BY t.started_at DESC, t.id DESC LIMIT ?`,
+    ),
+    entryOf: db.prepare(`SELECT t.*, e.oid FROM entries e JOIN tournaments t ON t.id = e.tournament_id WHERE e.tournament_id = ? AND e.uid = ?`),
+    handsIn: db.prepare(`SELECT data FROM hands WHERE tournament_id = ? ORDER BY n`),
+    // 取り込み：同じ部屋で、最初のハンドより前の1日以内に始まり、まだファイルと結びついていない大会（DB に先に入っていた同じ大会）
+    findRoom: db.prepare(`SELECT id FROM tournaments WHERE source = 'mp' AND room = ? AND file IS NULL AND started_at BETWEEN ? AND ? ORDER BY started_at DESC LIMIT 1`),
+    entryIgn: db.prepare(`INSERT OR IGNORE INTO entries (tournament_id, oid, uid, name) VALUES (?, ?, ?, ?)`),
+  };
+  const DAY = 864e5;
+  // 傾向の覚え（key -> { sig, r }）。ハンドが増えたり、大会が終わったりしたら作り直す
+  const cache = new Map();
+  // analyze の結果どうしを足す（対人と対CPU を足して合算にする）
+  const addA = (a, b) => {
+    const sum = (x, y) => {
+      const o = { ...x };
+      for (const [k, v] of Object.entries(y)) o[k] = typeof v === "object" ? sum(o[k] || {}, v) : (o[k] || 0) + v;
+      return o;
+    };
+    return { all: sum(a.all, b.all), pos: sum(a.pos, b.pos), depth: sum(a.depth, b.depth) };
   };
   const humans = (g) => g.P.filter((p) => p.hero);
   const places = db.transaction((tid, g) => {
@@ -80,45 +114,42 @@ function openRecords(db) {
       return { tid, saved };
     }),
     // その人が配られたハンド（古い順）。source: "mp" / "solo" / 省略で両方、since: この時刻（ms）以降
+    // done: 続いているみんなで遊ぶ大会のハンドは入れない
     handsOf(uid, o = {}) {
-      const where = ["hp.uid = ?"], args = [uid];
-      if (o.source) where.push("t.source = ?"), args.push(o.source);
-      if (o.since) where.push("h.at >= ?"), args.push(o.since);
-      return db
-        .prepare(
-          `SELECT h.data, t.source FROM hand_players hp JOIN hands h ON h.id = hp.hand_id JOIN tournaments t ON t.id = hp.tournament_id
-           WHERE ${where.join(" AND ")} ORDER BY h.at, h.id`,
-        )
-        .all(...args)
+      return q.handsOf
+        .all({ uid, source: o.source || null, since: o.since || 0, done: o.done ? 1 : 0 })
         .map((r) => Object.assign(JSON.parse(r.data), { source: r.source }));
     },
     // その人が参加した大会（新しい順）。自分の順位・リエントリー・配られたハンドの数つき
-    tournamentsOf(uid, limit = 200) {
-      return db
-        .prepare(
-          `SELECT t.id, t.source, t.room, t.started_at, t.finished_at, t.finished, t.closed, t.entries, t.blind_min,
-                  e.oid, e.place, e.rebuys,
-                  (SELECT COUNT(*) FROM hand_players hp WHERE hp.tournament_id = t.id AND hp.uid = e.uid) AS hands
-           FROM entries e JOIN tournaments t ON t.id = e.tournament_id
-           WHERE e.uid = ? ORDER BY t.started_at DESC, t.id DESC LIMIT ?`,
-        )
-        .all(uid, limit);
-    },
+    tournamentsOf: (uid, limit = 200) => q.tournamentsOf.all(uid, limit),
     // その人がその大会に参加していれば { t: 大会, oid: その人の席 }。していなければ null
     entryOf(tid, uid) {
-      const r = db.prepare(`SELECT t.*, e.oid FROM entries e JOIN tournaments t ON t.id = e.tournament_id WHERE e.tournament_id = ? AND e.uid = ?`).get(tid, uid);
+      const r = q.entryOf.get(tid, uid);
       return r ? { t: r, oid: r.oid } : null;
     },
-    handsIn: (tid) => db.prepare(`SELECT data FROM hands WHERE tournament_id = ? ORDER BY n`).all(tid).map((r) => JSON.parse(r.data)),
+    handsIn: (tid) => q.handsIn.all(tid).map((r) => JSON.parse(r.data)),
     // その人の打ち方の傾向（engine.js の analyze）。対人（mp）と対CPU（solo）を分けたものと、合わせたもの
+    //   o.done: 続いているみんなで遊ぶ大会は数えない（他の人を見るとき）
+    //   since は日の単位に切り下げて数え、結果は覚えておく（ハンドが増えるか大会が終わるまで使い回す）
     analyzeUser(uid, o = {}) {
-      const hs = this.handsOf(uid, { since: o.since }), mine = (s) => s.uid === uid;
-      return {
-        all: analyze(hs, mine),
-        mp: analyze(hs.filter((h) => h.source === "mp"), mine),
-        solo: analyze(hs.filter((h) => h.source === "solo"), mine),
-        hands: hs.length,
-      };
+      const since = o.since ? Math.floor(o.since / DAY) * DAY : 0,
+        key = `${uid}|${since}|${o.done ? 1 : 0}`,
+        s = q.sig.get(uid),
+        sig = s.n + "/" + s.d,
+        c = cache.get(key);
+      if (c && c.sig === sig) return c.r;
+      const hs = this.handsOf(uid, { since, done: o.done }), mine = (x) => x.uid === uid;
+      const mp = analyze(hs.filter((h) => h.source === "mp"), mine),
+        solo = analyze(hs.filter((h) => h.source === "solo"), mine);
+      const r = { all: addA(mp, solo), mp, solo, hands: hs.length };
+      if (cache.size > 500) cache.clear();
+      cache.set(key, { sig, r });
+      return r;
+    },
+    // 身内CPUの材料用：src（"all" / "mp" / "solo"）だけを、全期間と recentSince 以降で数える（ハンドは1回だけ読む）
+    profileOf(uid, o = {}) {
+      const hs = this.handsOf(uid, { source: o.src && o.src !== "all" ? o.src : null, done: o.done }), mine = (x) => x.uid === uid;
+      return { all: analyze(hs, mine), recent: analyze(hs.filter((h) => h.at >= (o.recentSince || 0)), mine) };
     },
     // ハンド履歴ファイルと大会を結びつける（取り込みのとき、同じ大会を2回入れないため）
     markFile: (tid, file) => q.file.run(path.basename(file), tid),
@@ -151,7 +182,9 @@ function openRecords(db) {
         first = hands[0],
         fin = Date.parse(body.finishedAt) || (hands.length ? hands[hands.length - 1].at : null),
         done = body.finished === undefined ? 1 : body.finished ? 1 : 0;
-      const tid = Number(q.tour.run("mp", body.room || null, null, first ? first.at : fin, body.entries || null, null).lastInsertRowid);
+      // DB に同じ大会が先に入っていれば（大会中に書いた分。写しから戻したあとや、ファイルとの結びつけに失敗したとき）、そこへ足りない分を足す
+      const same = body.room && first && first.at ? q.findRoom.get(body.room, first.at - DAY, first.at) : null;
+      const tid = same ? same.id : Number(q.tour.run("mp", body.room || null, null, first ? first.at : fin, body.entries || null, null).lastInsertRowid);
       q.fin.run(fin, done, done ? 0 : 1, body.entries || null, tid);
       q.file.run(f, tid);
       // 名前 → 席の番号（人間の席から）
@@ -160,7 +193,7 @@ function openRecords(db) {
       const players = Array.isArray(body.players) ? body.players : [];
       players.forEach((p, i) => {
         const oid = oidOf[p.name] || "x" + i;
-        q.entry.run(tid, oid, p.uid || null, String(p.name || "?"));
+        q.entryIgn.run(tid, oid, p.uid || null, String(p.name || "?"));
         q.place.run(p.place || null, p.re || 0, tid, oid);
         if (p.stats) q.stats.run(JSON.stringify(p.stats), tid, oid);
       });
