@@ -971,10 +971,36 @@ const cardText = (c) => RK[c % 13] + SU[(c / 13) | 0];
 // 日時の表記。fileStamp はファイル名用（20261115-0930）
 const two = (x) => String(x).padStart(2, "0"),
   fileStamp = (d) => `${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}`;
+// ストリートと行動の呼び名（テキストの履歴と、卓の再生で同じものを使う）
+const STREET_NAME = { 0: "プリフロップ", 3: "フロップ", 4: "ターン", 5: "リバー" },
+  ACT_NAME = { f: "フォールド", k: "チェック", c: "コール", b: "ベット", r: "レイズ" };
+// 1手の表記。f: 額を BB にする関数、u: 額の後ろに付ける単位
+const actText = (a, f, u = "") =>
+  ACT_NAME[a.a] + (a.a == "c" ? " " + f(a.x) + u : a.a == "b" || a.a == "r" ? " " + f(a.to) + u : "") + (a.ai ? "（オールイン）" : "");
+// 履歴から席の状態を組み立て直すとき（analyze・replayFrames）の、チップを出す処理と、アンティ・ブラインド
+const putChips = (p, x) => {
+  x = Math.min(x, p.stack);
+  p.stack -= x;
+  p.bet += x;
+  p.tot += x;
+  if (!p.stack) p.allin = 1;
+};
+// P: 席の状態（stack, bet, tot, allin）。戻り値: [SB の席, BB の席]
+function postForced(P, sb, bb, an) {
+  P.forEach((p) => {
+    const x = Math.min(an, p.stack);
+    p.stack -= x;
+    p.tot += x;
+    if (!p.stack) p.allin = 1;
+  });
+  const n = P.length, s0 = n == 2 ? P[0] : P[1], b0 = n == 2 ? P[1] : P[2];
+  putChips(s0, sb);
+  putChips(b0, bb);
+  return [s0, b0];
+}
 // 読みやすいテキストにする（額は、そのハンドのBB単位）
 function histText(hands) {
-  const ST = { 0: "プリフロップ", 3: "フロップ", 4: "ターン", 5: "リバー" },
-    A = { f: "フォールド", k: "チェック", c: "コール", b: "ベット", r: "レイズ" };
+  const ST = STREET_NAME;
   return hands
     .map((H) => {
       const f = (x) => +(x / H.bb).toFixed(1),
@@ -991,7 +1017,7 @@ function histText(hands) {
           out.push(`-- ${ST[st]}${st ? " " + cs(H.bd.slice(0, st)) : ""}`);
         }
         const s = H.seats[a.i];
-        out.push(`  ${s.name} ${A[a.a]}${a.a == "c" ? " " + f(a.x) + "BB" : a.a == "b" || a.a == "r" ? " " + f(a.to) + "BB" : ""}${a.ai ? "（オールイン）" : ""}`);
+        out.push(`  ${s.name} ${actText(a, f, "BB")}`);
       });
       // 誰も行動しないまま進んだストリート（オールインのあと）もボードを出す
       for (const k of [3, 4, 5]) if (H.bd.length >= k && k > st) out.push(`-- ${ST[k]} ${cs(H.bd.slice(0, k))}`);
@@ -1027,22 +1053,8 @@ function analyze(hands, pick) {
     const { sb, bb, an } = H,
       unit = sb + bb + n * an,
       P = seats.map((s) => ({ h: s.h, stack: s.st, tot: 0, bet: 0, fold: 0, allin: 0, acted: 0, ck: 0, pc: 0, pfr: 0, hs: {} }));
-    const put = (p, x) => {
-      x = Math.min(x, p.stack);
-      p.stack -= x;
-      p.bet += x;
-      p.tot += x;
-      if (!p.stack) p.allin = 1;
-    };
-    P.forEach((p) => {
-      const x = Math.min(an, p.stack);
-      p.stack -= x;
-      p.tot += x;
-      if (!p.stack) p.allin = 1;
-    });
-    const s0 = n == 2 ? P[0] : P[1], b0 = n == 2 ? P[1] : P[2];
-    put(s0, sb);
-    put(b0, bb);
+    const put = putChips,
+      [s0, b0] = postForced(P, sb, bb, an);
     // 配られたときの M（アンティ・ブラインドを出す前のスタックで）
     const M = seats.map((s) => s.st / unit);
     let cur = Math.max(s0.bet, b0.bet), street = 0, pre = false;
@@ -1147,6 +1159,100 @@ function analyze(hands, pick) {
 function analyzeRows(counts) {
   const v = (n, d) => (counts[d] > 0 ? (counts[n] || 0) / counts[d] : null);
   return ME_ROWS.map(([name, n, d, r]) => ({ name, key: n + "/" + d, kind: r, value: v(n, d), count: Math.round(counts[d] || 0) }));
+}
+// 1ハンドの見出し用の情報（振り返り・見返すページの一覧と絞り込みに使う）。oid の人が配られていなければ null
+//   { i: 席の番号, seat, pos: 位置, net: 増減（BB）, vp: 自分から参加した, ai: オールインした, big: ポットが 20BB 以上, sd: ショーダウンまで行った }
+function handInfo(H, oid) {
+  const i = (H.seats || []).findIndex((s) => s.oid === oid), s = H.seats && H.seats[i];
+  if (!s) return null;
+  const mine = (H.acts || []).filter((a) => a.i === i);
+  return {
+    i,
+    seat: s,
+    pos: posName(i, H.seats.length),
+    net: (s.end - s.st) / (H.bb || 1),
+    vp: mine.some((a) => a.s === 0 && (a.a === "r" || a.a === "b" || (a.a === "c" && a.x > 0))),
+    ai: mine.some((a) => a.ai),
+    big: (H.win || []).reduce((x, w) => x + w.x, 0) >= 20 * (H.bb || 1),
+    sd: (H.sd || []).some((x) => x.i === i),
+  };
+}
+// ---- 再生：1ハンドを、卓の絵の「コマ」の並びにする（hands.html が使う）----
+// コマ = { cap: 説明, street: 0/3/4/5, board: そのときのボード, pot: ポット（このストリートのベットも含む。ゲーム画面の POT と同じ）,
+//          seats: [{ stack, bet: このストリートで出した額, fold, allin, act: 直前の行動の言葉, open: 手札が表になっているか }],
+//          actor: 行動した席（なければ -1） }
+// 手札が表になるのは、ショーダウン、またはもう誰も打てなくなったとき（オールインで決着がつくとき）。履歴の shown に合わせる
+function replayFrames(H) {
+  const seats = H.seats || [], n = seats.length, bb = H.bb || 1,
+    f = (x) => +(x / bb).toFixed(1);
+  const P = seats.map((s) => ({ stack: s.st, bet: 0, tot: 0, fold: 0, allin: 0, act: null, open: 0 }));
+  let street = 0, revealed = false;
+  const frames = [];
+  const snap = (cap, actor = -1) =>
+    frames.push({
+      cap,
+      street,
+      board: (H.bd || []).slice(0, street),
+      pot: P.reduce((x, p) => x + p.tot, 0),
+      seats: P.map((p) => ({ stack: p.stack, bet: p.bet, fold: p.fold, allin: p.allin, act: p.act, open: p.open })),
+      actor,
+    });
+  // もう誰も打てない（降りていない人のうち、打てる人が1人以下）なら、表になる手札を開く
+  // ゲームと同じく、確かめるのはベットのラウンドが終わったとき（ストリートが変わる前・最後の行動のあと）だけ
+  // （1手ごとに確かめると、オールインに対してまだ答えていない人の手札が先に開いてしまう）
+  const maybeReveal = () => {
+    const live = P.filter((p) => !p.fold);
+    if (revealed || live.length < 2 || live.filter((p) => !p.allin).length > 1) return;
+    revealed = true;
+    seats.forEach((s, i) => s.shown && !P[i].fold && (P[i].open = 1));
+  };
+  // アンティとブラインド
+  if (n >= 2) postForced(P, H.sb || 0, bb, H.an || 0);
+  snap(`配札（SB ${f(H.sb || 0)} / BB 1 / アンティ ${f(H.an || 0)}BB）`);
+  const newStreet = (k) => {
+    P.forEach((p) => {
+      p.bet = 0;
+      p.act = null;
+    });
+    street = k;
+    snap(`${STREET_NAME[k]}`);
+  };
+  for (const a of H.acts || []) {
+    if (a.s != street) {
+      maybeReveal(); // 前のストリートのベットが終わった
+      newStreet(a.s);
+    }
+    const p = P[a.i];
+    if (!p) break;
+    if (a.a == "f") p.fold = 1;
+    else putChips(p, a.x);
+    p.act = actText(a, f);
+    snap(`${seats[a.i].name} ${p.act}`, a.i);
+  }
+  // 最後のベットが終わった（行動がひとつもないとき＝アンティ・ブラインドで全員オールインのときも、ここで開く）
+  maybeReveal();
+  // 誰も打たないまま進んだストリート（オールインのあと）
+  for (const k of [3, 4, 5]) if ((H.bd || []).length >= k && k > street) newStreet(k);
+  // ショーダウン
+  if ((H.sd || []).length) {
+    P.forEach((p) => (p.act = null));
+    for (const x of H.sd) if (P[x.i]) (P[x.i].open = 1), (P[x.i].act = x.r);
+    snap("ショーダウン");
+  }
+  // 獲得：スタックを終了時に合わせる
+  P.forEach((p, i) => {
+    p.stack = seats[i].end;
+    p.bet = 0;
+    p.tot = 0;
+  });
+  const won = {};
+  for (const w of H.win || []) {
+    const sh = Math.floor(w.x / w.w.length);
+    w.w.forEach((i, k) => (won[i] = (won[i] || 0) + sh + (k == 0 ? w.x - sh * w.w.length : 0)));
+  }
+  P.forEach((p, i) => (p.act = won[i] ? `+${f(won[i])} 獲得` : p.act));
+  snap((H.win || []).map((w) => `${w.w.map((i) => seats[i].name).join("・")} が ${f(w.x)}BB 獲得`).join(" / ") || "終了");
+  return frames;
 }
 // 時間が来ていればレベルを上げる
 function advanceLevel(g, now) {
@@ -1288,7 +1394,7 @@ const api = {
   R, SU, RK, LV, CPU0, TY, TYC, NM, NC, HN, REC_KEYS, BIGZ, MEMK, MEK, ME_DECAY, ME_PRIOR, ME_ROWS,
   fromType, shf, alive, itm, cd, e5, best, hcls, pre, draw, tier, track, newObs, obs, ai2,
   hand, bust, bal, advanceLevel, autoAct, playHand, soloSetup, loadMem, saveMem, meBlend, meStats,
-  histView, histText, cardText, fileStamp, analyze, analyzeRows, posName,
+  histView, histText, cardText, fileStamp, analyze, analyzeRows, posName, replayFrames, handInfo,
 };
 if (typeof module == "object" && module.exports) module.exports = api;
 else root.AlpEngine = api;

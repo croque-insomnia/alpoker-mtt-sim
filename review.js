@@ -1,18 +1,7 @@
 // review.js — 振り返りの画面（参加した大会・ハンドの一覧と絞り込み・1ハンドの表示・保存）と、打ち方の傾向の画面
 // サーバー（server/review.js）から届いたものは、textContent でだけ画面に入れる（名前などを HTML として扱わない）
-const $ = (i) => document.getElementById(i);
-const { histText, cardText, posName, fileStamp } = AlpEngine;
-const note = (kind, text) => {
-  $("msg").hidden = !text;
-  $("msg").className = kind;
-  $("msg").textContent = text || "";
-};
-const get = async (p) => {
-  const r = await fetch(p, { cache: "no-store" });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw Object.assign(new Error(j.why || "読み出せませんでした"), { status: r.status });
-  return j;
-};
+// $・note・get・when は page.js
+const { histText, cardText, fileStamp, handInfo } = AlpEngine;
 const el = (tag, text, attrs) => {
   const e = document.createElement(tag);
   if (text != null) e.textContent = text;
@@ -24,7 +13,6 @@ const row = (cells, head) => {
   for (const c of cells) tr.appendChild(el(head ? "th" : "td", c));
   return tr;
 };
-const when = (t) => (t ? new Date(t).toLocaleString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
 const saveFile = (name, text, type) => {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([text], { type }));
@@ -91,23 +79,11 @@ async function openTournament(id) {
   showHands();
   $("hp").scrollIntoView({ behavior: "smooth" });
 }
-// 自分の席・結果など、1ハンドの見出し用の情報
-function info(H) {
-  const i = H.seats.findIndex((s) => s.oid === cur.tournament.oid),
-    s = H.seats[i];
-  if (!s) return null;
-  const mine = (H.acts || []).filter((a) => a.i === i);
-  return {
-    i,
-    s,
-    pos: posName(i, H.seats.length),
-    net: (s.end - s.st) / H.bb,
-    vp: mine.some((a) => a.s === 0 && (a.a === "r" || a.a === "b" || (a.a === "c" && a.x > 0))),
-    ai: mine.some((a) => a.ai),
-    big: (H.win || []).reduce((x, w) => x + w.x, 0) >= 20 * H.bb,
-    sd: (H.sd || []).some((x) => x.i === i),
-  };
-}
+// 自分の席・結果など、1ハンドの見出し用の情報（engine.js の handInfo）
+const info = (H) => {
+  const x = handInfo(H, cur.tournament.oid);
+  return x && { ...x, s: x.seat };
+};
 function filtered() {
   const f = { sd: $("fsd").checked, ai: $("fai").checked, big: $("fbig").checked, vp: $("fvp").checked, pos: $("fpos").value };
   return cur.hands.filter((H) => {
@@ -135,6 +111,11 @@ function showHands() {
     tr.onclick = () => {
       $("h1").hidden = false;
       $("h1").textContent = histText([H]);
+      // 卓の絵で1手ずつ見る（ハンドを見返すページ）
+      const a = document.createElement("a");
+      a.href = `hands.html?t=${cur.tournament.id}&n=${H.n}`;
+      a.textContent = "▶ 卓で再生";
+      $("h1").prepend(a, "\n\n");
     };
     t.appendChild(tr);
   }

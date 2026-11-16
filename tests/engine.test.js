@@ -150,3 +150,67 @@ test("ハンド履歴：テキストにできる", () => {
   assert.match(t, /\[[2-9TJQKA][♠♥♦♣] [2-9TJQKA][♠♥♦♣]\]/);
   assert.equal(t.split("\n\n").length, g.hist.length);
 });
+
+// ---- 再生のコマ（hands.html） ----
+test("再生：どのコマでもチップの合計が変わらず、最後のコマは記録どおり。手札が表になるのは履歴で公開された席だけ", () => {
+  let checked = 0, withShow = 0;
+  for (let run = 0; run < 6; run++) {
+    const g = soloWithHistory(80);
+    for (const H of g.hist) {
+      const fr = E.replayFrames(H), total = H.seats.reduce((a, s) => a + s.st, 0);
+      assert.ok(fr.length >= 2);
+      fr.forEach((f, j) => assert.equal(f.seats.reduce((a, s) => a + s.stack, 0) + f.pot, total, `#${H.n} コマ ${j}`));
+      const last = fr[fr.length - 1];
+      assert.deepEqual(last.seats.map((s) => s.stack), H.seats.map((s) => s.end));
+      assert.equal(last.pot, 0);
+      // 行動の数だけ「行動したコマ」がある
+      assert.equal(fr.filter((f) => f.actor >= 0).length, H.acts.length);
+      // 表になった席は、履歴で公開された席（降りていない）だけ
+      H.seats.forEach((s, i) => {
+        const opened = fr.some((f) => f.seats[i].open);
+        if (opened) assert.ok(s.shown, `#${H.n} 席 ${i}`);
+        if (s.shown && !last.seats[i].fold) assert.ok(last.seats[i].open, `#${H.n} 席 ${i} は最後には表`);
+      });
+      if (H.seats.some((s) => s.shown)) withShow++;
+      // ボードは、ストリートの数だけ見える
+      assert.ok(fr.every((f) => f.board.length === f.street));
+      checked++;
+    }
+  }
+  assert.ok(checked > 100 && withShow > 5);
+});
+
+test("1ハンドの見出し：増減・位置・自分から参加したか（分析器と同じ）", () => {
+  const g = soloWithHistory(60);
+  for (const H of g.hist) {
+    const x = E.handInfo(H, "hero"), s = H.seats.find((q) => q.oid === "hero");
+    assert.equal(x.net, (s.end - s.st) / H.bb);
+    assert.equal(x.pos, E.posName(x.i, H.seats.length));
+    assert.equal(x.vp, !!(E.analyze([H], (q) => q.oid === "hero").all.vpip || 0));
+  }
+  assert.equal(E.handInfo(g.hist[0], "nobody"), null);
+});
+
+test("再生：手札が開くのは、ベットのラウンドが終わってから（オールインにまだ答えていない人の手札は開かない）", () => {
+  const seat = (name, st, h) => ({ name, oid: name, hero: 0, st, end: st, h, shown: 1 });
+  // ヘッズアップ：A（ボタン＝SB）がオールイン、B がコール
+  const H = {
+    n: 1, lv: 1, sb: 50, bb: 100, an: 0, tb: 1, bd: [0, 1, 2, 3, 4],
+    seats: [seat("A", 1000, [10, 11]), seat("B", 1000, [20, 21])],
+    acts: [{ s: 0, i: 0, a: "r", x: 950, to: 1000, ai: 1 }, { s: 0, i: 1, a: "c", x: 900, to: 1000, ai: 1 }],
+    sd: [{ i: 0, r: "x" }, { i: 1, r: "y" }], win: [{ x: 2000, w: [0] }],
+  };
+  H.seats[0].end = 2000;
+  H.seats[1].end = 0;
+  const fr = E.replayFrames(H);
+  const shove = fr.find((f) => f.actor === 0), flop = fr.find((f) => f.street === 3);
+  assert.deepEqual(shove.seats.map((s) => s.open), [0, 0], "オールインのコマでは、まだ誰の手札も開かない");
+  assert.deepEqual(flop.seats.map((s) => s.open), [1, 1], "ラウンドが終わったら、フロップのコマで開く");
+  // アンティとブラインドで2人ともオールイン（行動がひとつもない）：ランアウトのコマで開く
+  const B = { ...H, seats: [seat("A", 50, [10, 11]), seat("B", 100, [20, 21])], acts: [], win: [{ x: 100, w: [1] }, { x: 50, w: [1] }] };
+  B.seats[0].end = 0;
+  B.seats[1].end = 150;
+  const fb = E.replayFrames(B);
+  assert.equal(fb[0].seats[0].open, 0, "配札のコマではまだ");
+  for (const k of [3, 4, 5]) assert.deepEqual(fb.find((f) => f.street === k).seats.map((s) => s.open), [1, 1], `ストリート ${k}`);
+});
