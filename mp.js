@@ -45,7 +45,7 @@ const mpN = (x) => (Number.isFinite(+x) ? +x : 0),
     );
 function mpClean(v) {
   const o = {};
-  for (const k of ["lv", "bb", "an", "rem", "al", "en", "itm", "avg", "rk", "st", "re", "pot", "ask", "away", "place", "over", "ti", "tn", "spec", "wait"])
+  for (const k of ["lv", "bb", "an", "rem", "al", "en", "itm", "avg", "rk", "st", "re", "pot", "bets", "ask", "away", "place", "over", "ti", "tn", "spec", "wait"])
     o[k] = mpN(v[k]);
   o.lv = Math.min(Math.max(0, o.lv | 0), LV.length - 1);
   o.bb = o.bb || 1;
@@ -104,7 +104,7 @@ function mpRender(v) {
   $("tb").className = "ring";
   $("tb").innerHTML = tableHtml(
     fromMe(v.pl, (p) => p.me).map(seat),
-    `<div class=bd>${v.bd.map((c) => cd(c)).join("") || "&nbsp;"}<span>POT ${f(v.pot)} BB</span></div>`,
+    `<div class=bd>${v.bd.map((c) => cd(c)).join("") || "&nbsp;"}${potHtml(v.pot, v.bets, f)}</div>`,
   );
   const q = v.req;
   MP.rt = q ? Date.now() + q.rem : 0;

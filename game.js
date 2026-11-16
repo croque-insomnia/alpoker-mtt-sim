@@ -186,12 +186,12 @@ function render() {
       me: p.hero,
       bet: p.bet ? fb(p.bet) : 0,
     });
-  const pot = (T.ps || []).reduce((s, p) => s + p.tot, 0);
+  const { total: pot, bets } = AlpEngine.potOf(T.ps);
   // 席の順に円に並べる。あなたを下に置き、そこから時計回り。バストしてまだ表示している人は、座っていた位置に（ringSeats）
   $("tb").className = "ring";
   $("tb").innerHTML = tableHtml(
     fromMe(AlpEngine.ringSeats(T.p, T.ps, T.gone), (p) => p.hero).map(seat),
-    `<div class=bd>${(T.bd || []).map((c) => cd(c)).join("") || "&nbsp;"}<span>POT ${fb(pot)} BB</span></div>`,
+    `<div class=bd>${(T.bd || []).map((c) => cd(c)).join("") || "&nbsp;"}${potHtml(pot, bets, fb)}</div>`,
   );
   let c = "";
   if (G.req) {

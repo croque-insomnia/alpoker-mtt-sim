@@ -30,6 +30,12 @@ function tableHtml(seats, center) {
     `<div class="mid">${center}</div>`
   );
 }
+// 真ん中のポット表示。POT は前のストリートまでに集まった額（アンティ込み）で、このストリートのベットは含めない
+// （ベット額がポットの何%かを見て取れるように）。ベットが出ている間は、ベット込みの合計も小さく添える
+// total・bets は AlpEngine.potOf で、同じ席の一覧から数えたもの（ハンドが終わればベットはポットに集められ、bets は 0）
+function potHtml(total, bets, f) {
+  return `<span>POT ${f(total - bets)} BB</span>` + (bets > 0 ? `<small class="pt">ベット込み ${f(total)} BB</small>` : "");
+}
 // 席の並びを、me が先頭になるように回す（並びの順＝時計回りの順はそのまま）
 const fromMe = (list, isMe) => {
   const i = list.findIndex(isMe);

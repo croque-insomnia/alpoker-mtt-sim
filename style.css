@@ -318,3 +318,4 @@ label.chk { display: block; margin: 8px 0; }
   width: 42%;
 }
 #tb.ring .bd { margin: 0; }
+.bd .pt { display: block; font-size: 11px; color: rgba(255, 255, 255, 0.6); }
