@@ -141,16 +141,25 @@ function draw() {
     d.appendChild(el("span", "ac", st.act || ""));
     return d;
   };
-  const tb = $("tb");
+  const tb = $("tb"), n = H.seats.length, ring = AlpEngine.seatRing(n);
   tb.textContent = "";
-  const row = el("div", "row");
-  // 自分以外を、自分の次の席から順に上へ並べる（卓を回る順）
-  for (let j = 1; j < H.seats.length; j++) row.appendChild(seat((me.i + j) % H.seats.length));
-  const bd = el("div", "bd");
+  tb.className = "ring";
+  tb.appendChild(el("div", "felt"));
+  // 自分を下に置き、席の順に時計回り（卓を回る順＝アクションの順）
+  for (let j = 0; j < n; j++) {
+    const w = el("div", "seat");
+    w.style.left = ring[j].x + "%";
+    w.style.top = ring[j].y + "%";
+    w.appendChild(seat((me.i + j) % n));
+    tb.appendChild(w);
+  }
+  const mid = el("div", "mid"), bd = el("div", "bd");
   if (fr.board.length) fr.board.forEach((c) => bd.appendChild(card(c)));
   else bd.append(" ");
-  bd.appendChild(el("span", null, `POT ${f(fr.pot)} BB　Lv${H.lv}（${H.sb}/${H.bb} ante ${H.an}）`));
-  tb.append(row, bd, seat(me.i));
+  bd.appendChild(el("span", null, `POT ${f(fr.pot)} BB`));
+  bd.appendChild(el("small", "lv", `Lv${H.lv}（${H.sb}/${H.bb} ante ${H.an}）`));
+  mid.appendChild(bd);
+  tb.appendChild(mid);
   $("cap").textContent = fr.cap;
   $("cnt").textContent = `${k + 1} / ${frames.length}`;
   $("fp").disabled = $("f0").disabled = k == 0;

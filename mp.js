@@ -100,8 +100,12 @@ function mpRender(v) {
       me: p.me,
       bet: p.bet ? f(p.bet) : 0,
     });
-  const me = v.pl.find((p) => p.me);
-  $("tb").innerHTML = `<div class=row>${v.pl.filter((p) => !p.me).map(seat).join("")}</div><div class=bd>${v.bd.map((c) => cd(c)).join("") || "&nbsp;"}<span>POT ${f(v.pot)} BB</span></div>${me ? seat(me) : ""}`;
+  // 席の順に円に並べる。あなたを下に置き、そこから時計回り（観戦では卓の最初の席が下）
+  $("tb").className = "ring";
+  $("tb").innerHTML = tableHtml(
+    fromMe(v.pl, (p) => p.me).map(seat),
+    `<div class=bd>${v.bd.map((c) => cd(c)).join("") || "&nbsp;"}<span>POT ${f(v.pot)} BB</span></div>`,
+  );
   const q = v.req;
   MP.rt = q ? Date.now() + q.rem : 0;
   // 操作欄は、中身が変わったときだけ作り直す（他の卓が進むたびに画面データが届くため。

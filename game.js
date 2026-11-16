@@ -155,6 +155,20 @@ function seatHtml(o) {
     `<em>${o.bet ? o.bet + "BB" : ""}</em></div>`
   );
 }
+// 卓：席を楕円に並べ、真ん中にボードとポット。seats は席の HTML を「下の真ん中（ふつうは自分）から時計回り」の順に
+function tableHtml(seats, center) {
+  const pos = AlpEngine.seatRing(seats.length);
+  return (
+    `<div class="felt"></div>` +
+    seats.map((h, k) => `<div class="seat" style="left:${pos[k].x}%;top:${pos[k].y}%">${h}</div>`).join("") +
+    `<div class="mid">${center}</div>`
+  );
+}
+// 席の並びを、me が先頭になるように回す（並びの順＝時計回りの順はそのまま）
+const fromMe = (list, isMe) => {
+  const i = list.findIndex(isMe);
+  return i > 0 ? list.slice(i).concat(list.slice(0, i)) : list;
+};
 // 自分の番の操作欄。A: 行動を送る関数の名前、X: レイズ額を動かす関数の名前（ひとり用は A / X、みんなで遊ぶは MA / MX）
 //   o: { toCall, call: コールの額(BB), cur, mn: 最小のレイズ額, mx: 最大（オールイン）, pot, f: 点 → BB }
 // 1段目に「フォールド・コール（チェック）・レイズ」を並べ、2段目にレイズ額（スライダーとよく使う額）をまとめる
@@ -204,13 +218,12 @@ function render() {
       bet: p.bet ? fb(p.bet) : 0,
     });
   const pot = (T.ps || []).reduce((s, p) => s + p.tot, 0);
-  $("tb").innerHTML = `<div class=row>${T.p
-    .concat(T.gone || [])
-    .filter((p) => !p.hero)
-    .map(seat)
-    .join(
-      "",
-    )}</div><div class=bd>${(T.bd || []).map((c) => cd(c)).join("") || "&nbsp;"}<span>POT ${fb(pot)} BB</span></div>${seat(h)}`;
+  // 席の順（T.p）で円に並べる。あなたを下に置き、そこから時計回り。バストしてまだ表示している人は最後に
+  $("tb").className = "ring";
+  $("tb").innerHTML = tableHtml(
+    fromMe(T.p, (p) => p.hero).concat(T.gone || []).map(seat),
+    `<div class=bd>${(T.bd || []).map((c) => cd(c)).join("") || "&nbsp;"}<span>POT ${fb(pot)} BB</span></div>`,
+  );
   let c = "";
   if (G.req) {
     const { p, c: q } = G.req,

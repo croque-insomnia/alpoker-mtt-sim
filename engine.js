@@ -1160,6 +1160,16 @@ function analyzeRows(counts) {
   const v = (n, d) => (counts[d] > 0 ? (counts[n] || 0) / counts[d] : null);
   return ME_ROWS.map(([name, n, d, r]) => ({ name, key: n + "/" + d, kind: r, value: v(n, d), count: Math.round(counts[d] || 0) }));
 }
+// 卓の絵で、席を楕円に並べる位置（卓の幅・高さに対する %）。0 番目を下の真ん中に置き、時計回り（左下 → 左上 → 右上 → 右下）
+// ポーカーのアクションは時計回りに進むので、席の並び（ボタンの次が SB、その次が BB …）がそのまま目で追える
+function seatRing(n, rx = 37, ry = 37) {
+  const out = [];
+  for (let k = 0; k < n; k++) {
+    const t = Math.PI / 2 + (2 * Math.PI * k) / n; // 下（90°）から、画面の上で時計回り
+    out.push({ x: +(50 + rx * Math.cos(t)).toFixed(2), y: +(50 + ry * Math.sin(t)).toFixed(2) });
+  }
+  return out;
+}
 // 1ハンドの見出し用の情報（振り返り・見返すページの一覧と絞り込みに使う）。oid の人が配られていなければ null
 //   { i: 席の番号, seat, pos: 位置, net: 増減（BB）, vp: 自分から参加した, ai: オールインした, big: ポットが 20BB 以上, sd: ショーダウンまで行った }
 function handInfo(H, oid) {
@@ -1394,7 +1404,7 @@ const api = {
   R, SU, RK, LV, CPU0, TY, TYC, NM, NC, HN, REC_KEYS, BIGZ, MEMK, MEK, ME_DECAY, ME_PRIOR, ME_ROWS,
   fromType, shf, alive, itm, cd, e5, best, hcls, pre, draw, tier, track, newObs, obs, ai2,
   hand, bust, bal, advanceLevel, autoAct, playHand, soloSetup, loadMem, saveMem, meBlend, meStats,
-  histView, histText, cardText, fileStamp, analyze, analyzeRows, posName, replayFrames, handInfo,
+  histView, histText, cardText, fileStamp, analyze, analyzeRows, posName, replayFrames, handInfo, seatRing,
 };
 if (typeof module == "object" && module.exports) module.exports = api;
 else root.AlpEngine = api;
