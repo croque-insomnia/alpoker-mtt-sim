@@ -214,3 +214,26 @@ test("再生：手札が開くのは、ベットのラウンドが終わって�
   assert.equal(fb[0].seats[0].open, 0, "配札のコマではまだ");
   for (const k of [3, 4, 5]) assert.deepEqual(fb.find((f) => f.street === k).seats.map((s) => s.open), [1, 1], `ストリート ${k}`);
 });
+
+test("卓の絵の席順：バストした人は座っていた位置に残り、席の数も変わらない。移ってきた人は後ろに", () => {
+  const [A, B, C, D, X] = ["A", "B", "C", "D", "X"].map((name) => ({ name }));
+  // 直前のハンドは B からの順（ボタンが B）。C がバストし、X がほかの卓から移ってきた
+  assert.deepEqual(E.ringSeats([A, B, D, X], [B, C, D, A], [C]).map((p) => p.name), ["B", "C", "D", "A", "X"]);
+  // まだハンドがない（直前の席順がない）ときは、座っている順に、バストした人を後ろに
+  assert.deepEqual(E.ringSeats([A, B], undefined, [C]).map((p) => p.name), ["A", "B", "C"]);
+  // ゲームで：バストした人が出たハンドのあとも、直前のハンドの席の数と順のまま
+  const g = soloWithHistory(0);
+  for (let i = 0; i < 200 && g.T.p.filter((p) => p.stack > 0).length > 1; i++) {
+    E.playHand(g, g.T);
+    const last = g.T.ps.slice();
+    E.bust(g, g.T);
+    // あなたがバストしたら、ゲームと同じくリエントリーさせる（0点のまま次のハンドに配られずに座り続けると、
+    // 直前のハンドにいない人として後ろに回るので、このあとの確かめが合わない。ゲームではリエントリーか終了を選ぶ）
+    if (g.hero.stack <= 0) g.hero.stack = 1e4;
+    if (!g.T.gone.length) continue;
+    const r = E.ringSeats(g.T.p, g.T.ps, g.T.gone);
+    assert.deepEqual(r, last, "バストした人を含めて、直前のハンドと同じ並び");
+    return;
+  }
+  assert.fail("バストが起きなかった");
+});
