@@ -1,18 +1,7 @@
 // review.js — 振り返りの画面（参加した大会・ハンドの一覧と絞り込み・1ハンドの表示・保存）と、打ち方の傾向の画面
 // サーバー（server/review.js）から届いたものは、textContent でだけ画面に入れる（名前などを HTML として扱わない）
-const $ = (i) => document.getElementById(i);
+// $・note・get・when は page.js
 const { histText, cardText, fileStamp, handInfo } = AlpEngine;
-const note = (kind, text) => {
-  $("msg").hidden = !text;
-  $("msg").className = kind;
-  $("msg").textContent = text || "";
-};
-const get = async (p) => {
-  const r = await fetch(p, { cache: "no-store" });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw Object.assign(new Error(j.why || "読み出せませんでした"), { status: r.status });
-  return j;
-};
 const el = (tag, text, attrs) => {
   const e = document.createElement(tag);
   if (text != null) e.textContent = text;
@@ -24,7 +13,6 @@ const row = (cells, head) => {
   for (const c of cells) tr.appendChild(el(head ? "th" : "td", c));
   return tr;
 };
-const when = (t) => (t ? new Date(t).toLocaleString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
 const saveFile = (name, text, type) => {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([text], { type }));

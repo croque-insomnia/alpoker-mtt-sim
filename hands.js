@@ -2,19 +2,8 @@
 // データは振り返りと同じ api/review/*（見える範囲も同じ。続いている大会は、自分の手札と公開された手札だけ）
 // 名前などサーバーから届いた文字は textContent でだけ入れる。札は 0〜51 の数なので、決まった形の要素を作る
 // ?t=大会ID&n=ハンド番号 で、そのハンドを直接開ける
-const $ = (i) => document.getElementById(i);
+// $・note・get・when は page.js
 const { replayFrames, histText, handInfo, posName, RK, SU } = AlpEngine;
-const note = (kind, text) => {
-  $("msg").hidden = !text;
-  $("msg").className = kind;
-  $("msg").textContent = text || "";
-};
-const get = async (p) => {
-  const r = await fetch(p, { cache: "no-store" });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw Object.assign(new Error(j.why || "読み出せませんでした"), { status: r.status });
-  return j;
-};
 const el = (tag, cls, text) => {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -27,11 +16,13 @@ const card = (c) => {
   const u = (c / 13) | 0;
   return el("i", "c s" + u, RK[c % 13] + SU[u]);
 };
-const when = (t) => (t ? new Date(t).toLocaleString("ja-JP", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
 
 let T = null, // 今の大会 { tournament, hands, running }
   list = [], // 絞り込んだハンド
   H = null, // 今のハンド
+  me = null, // 今のハンドでの自分の席（handInfo）
+  at = -1, // 今のハンドの、絞り込んだ一覧の中での位置
+  infos = new Map(), // ハンド -> handInfo（大会を開いたときに1回だけ数える）
   frames = [],
   k = 0, // 今のコマ
   timer = null;
@@ -59,24 +50,42 @@ async function start() {
     sel.appendChild(o);
   }
   $("pick").hidden = false;
-  const want = qs.get("t");
-  if (want && r.tournaments.some((t) => String(t.id) === want)) sel.value = want;
-  await openTournament(+sel.value, +qs.get("n") || 0);
+  const want = qs.get("t"), found = want && r.tournaments.some((t) => String(t.id) === want);
+  if (found) sel.value = want;
+  // アドレスの n（ハンド番号）は、アドレスの大会が見つかったときだけ使う（別の大会の同じ番号を開かない）
+  await openTournament(+sel.value, found ? +qs.get("n") || 0 : 0);
+  if (want && !found) note("err", "アドレスの大会は見られません（参加した大会だけ）。いちばん新しい大会を開きました。");
 }
 async function openTournament(id, n) {
   stop();
   try {
     T = await get("api/review/hands?t=" + id);
   } catch (e) {
+    // 前の大会を出したままにしない（選んだ大会と、画面・アドレスの中身がずれないように）
+    T = null;
+    clearHand();
+    infos = new Map();
+    $("hsel").textContent = "";
     return note("err", e.message);
   }
+  infos = new Map(T.hands.map((h) => [h, handInfo(h, T.tournament.oid)]));
   note("", "");
   $("note").textContent = T.running ? "この大会はまだ続いています。見えるのは、自分が配られたハンドの、自分の手札と公開された手札だけです。" : "";
   $("all").disabled = !!T.running;
   if (T.running) $("all").checked = false;
   refilter(n);
 }
-const info = (h) => handInfo(h, T.tournament.oid);
+const info = (h) => infos.get(h);
+// 今のハンドをやめる（再生を止め、絵を隠す。キーボードも効かなくなる）
+function clearHand() {
+  stop();
+  H = me = null;
+  at = -1;
+  frames = [];
+  k = 0;
+  $("rp").hidden = true;
+  $("hp").disabled = $("hn").disabled = true;
+}
 function refilter(n) {
   const f = { sd: $("fsd").checked, ai: $("fai").checked, big: $("fbig").checked, vp: $("fvp").checked, pos: $("fpos").value };
   list = T.hands.filter((h) => {
@@ -91,8 +100,9 @@ function refilter(n) {
     sel.appendChild(o);
   }
   if (!list.length) {
-    $("rp").hidden = true;
-    return note("", "条件に合うハンドがありません");
+    clearHand();
+    // 絞り込みのせいか、そもそも見られるハンドがないのかを分けて伝える
+    return note("", T.hands.some(info) ? "条件に合うハンドがありません" : "この大会には、見られるハンドがありません");
   }
   note("", "");
   const pick = list.find((h) => h.n === n) || list[0];
@@ -101,6 +111,8 @@ function refilter(n) {
 function openHand(h) {
   stop();
   H = h;
+  me = info(h);
+  at = list.indexOf(h);
   frames = replayFrames(h);
   k = 0;
   $("hsel").value = h.n;
@@ -113,7 +125,7 @@ function openHand(h) {
   draw();
 }
 function draw() {
-  const fr = frames[k], me = info(H), bb = H.bb || 1, f = (x) => +(x / bb).toFixed(1), all = $("all").checked;
+  const fr = frames[k], bb = H.bb || 1, f = (x) => +(x / bb).toFixed(1), all = $("all").checked;
   const seat = (i) => {
     const s = H.seats[i], st = fr.seats[i], d = el("div", "s" + (st.fold ? " f" : "") + (fr.actor === i ? " a" : "") + (i === me.i ? " h" : ""));
     const nm = el("b", null, s.name);
@@ -143,7 +155,6 @@ function draw() {
   $("cnt").textContent = `${k + 1} / ${frames.length}`;
   $("fp").disabled = $("f0").disabled = k == 0;
   $("fn").disabled = $("fe").disabled = k == frames.length - 1;
-  const at = list.indexOf(H);
   $("hp").disabled = at <= 0;
   $("hn").disabled = at >= list.length - 1;
 }
@@ -167,8 +178,8 @@ $("play").onclick = () => {
   timer = setInterval(() => (k >= frames.length - 1 ? stop() : go(k + 1)), 900);
 };
 const hop = (d) => {
-  const at = list.indexOf(H) + d;
-  if (at >= 0 && at < list.length) openHand(list[at]);
+  const to = at + d;
+  if (H && to >= 0 && to < list.length) openHand(list[to]);
 };
 $("hp").onclick = () => hop(-1);
 $("hn").onclick = () => hop(1);
@@ -178,7 +189,9 @@ $("all").onchange = () => H && draw();
 for (const id of ["fsd", "fai", "fbig", "fvp", "fpos"]) $(id).onchange = () => T && refilter(H && H.n);
 // キーボード：← → で1手、Shift+← → で前後のハンド、Home / End
 document.addEventListener("keydown", (e) => {
-  if (!H || /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName)) return;
+  // 文字を打つ欄・選ぶ欄にいるときは、その欄の操作を優先する（チェックボックスのあとは効く）
+  const a = document.activeElement, tag = a ? a.tagName : "";
+  if (!H || /^(SELECT|TEXTAREA)$/.test(tag) || (tag == "INPUT" && !/^(checkbox|radio|button)$/.test(a.type))) return;
   if (e.key == "ArrowRight") e.shiftKey ? hop(1) : (stop(), go(k + 1));
   else if (e.key == "ArrowLeft") e.shiftKey ? hop(-1) : (stop(), go(k - 1));
   else if (e.key == "Home") (stop(), go(0));
