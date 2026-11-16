@@ -81,14 +81,25 @@ function mpRender(v) {
   if (G.ty === undefined) G.ty = ls();
   const f = (x) => +(x / v.bb).toFixed(1);
   G.lvEnd = Date.now() + v.rem;
-  const hs = hdHtml({ lv: v.lv, bb: v.bb, an: v.an, al: v.al, en: v.en, itm: v.itm, avg: f(v.avg), rk: v.rk, st: f(v.st), re: v.re, spec: v.spec });
+  const hs = hdHtml({ lv: v.lv, bb: v.bb, an: v.an, al: v.al, en: v.en, itm: v.itm, avg: f(v.avg), rk: v.rk, st: f(v.st), re: v.re, spec: v.spec && !v.place, done: !!v.place, place: v.place });
   if (G.hs != hs) {
     G.hs = hs;
     $("hd").innerHTML = hs;
     tmr();
   }
   const seat = (p) =>
-    `<div class="s${p.fold ? " f" : ""}${p.act ? " a" : ""}${p.me ? " h" : ""}"><b style="color:${p.col || "inherit"}">${p.name}</b> <small>${p.me || !G.ty ? "" : p.ty} ${p.lab}${p.alive ? "" : " バスト"}</small><div>${f(p.stack)} BB</div><div>${p.h ? p.h.map((c) => cd(c)).join("") : p.hd ? cd(0, 1) + cd(0, 1) : "&nbsp;"}</div><em>${p.bet ? "bet " + f(p.bet) : ""}</em></div>`;
+    seatHtml({
+      name: p.name,
+      col: p.col,
+      sub: [p.me || !G.ty ? "" : p.ty, p.alive ? "" : "バスト"].filter(Boolean).join(" "),
+      lab: p.lab,
+      stack: f(p.stack),
+      cards: p.h ? p.h.map((c) => cd(c)).join("") : p.hd ? cd(0, 1) + cd(0, 1) : "",
+      fold: p.fold,
+      act: p.act,
+      me: p.me,
+      bet: p.bet ? f(p.bet) : 0,
+    });
   const me = v.pl.find((p) => p.me);
   $("tb").innerHTML = `<div class=row>${v.pl.filter((p) => !p.me).map(seat).join("")}</div><div class=bd>${v.bd.map((c) => cd(c)).join("") || "&nbsp;"}<span>POT ${f(v.pot)} BB</span></div>${me ? seat(me) : ""}`;
   const q = v.req;
@@ -121,7 +132,7 @@ function mpControls(v, f) {
     const mn = Math.min(q.cur + q.minR, q.mx);
     MP.mn = MP.rx = mn;
     MP.mx = q.mx;
-    c = `<div class="mu">あなたの番です。残り <b id=rtv></b> 秒</div>`;
+    c = `<div class="turn">あなたの番です　残り <b id=rtv></b> 秒</div>`;
     c += actHtml("MA", "MX", { toCall: q.toCall, call: f(Math.min(q.toCall, q.stack)), cur: q.cur, mn, mx: q.mx, pot: q.pot, f });
   }
   if (!q && v.ask)
@@ -136,9 +147,13 @@ function mpControls(v, f) {
 // ひとり用の render() は残し、みんなで遊ぶ間だけ最後のviewで描き直す（CPUタイプ表示の切替など）
 const _render = render;
 render = () => (G.mp && MP.v ? mpRender(MP.v) : _render());
+// 自分の番の残り時間。残りが少なくなったら目立たせる
 setInterval(() => {
   const e = $("rtv");
-  if (e && MP.rt) e.textContent = Math.max(0, Math.ceil((MP.rt - Date.now()) / 1000));
+  if (!e || !MP.rt) return;
+  const sec = Math.max(0, Math.ceil((MP.rt - Date.now()) / 1000));
+  e.textContent = sec;
+  e.parentNode.classList.toggle("warn", sec <= 8);
 }, 300);
 
 // ================= ロビー =================

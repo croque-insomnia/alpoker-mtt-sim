@@ -7,6 +7,7 @@
   --bd: #c9d5cc;
   --ft: #2f6b50;
   --cd: #fff;
+  --er: #b3392b;
   box-sizing: border-box;
   padding-top: env(safe-area-inset-top, 0px);
   padding-bottom: env(safe-area-inset-bottom, 0px);
@@ -21,9 +22,11 @@
     --bd: #2a3d34;
     --ft: #1d4a37;
     --cd: #f4f4f0;
+    --er: #ff8f80;
   }
 }
 :root[data-theme="dark"] {
+  --er: #ff8f80;
   --bg: #0f1a17;
   --pn: #16251f;
   --tx: #e8efe9;
@@ -193,7 +196,7 @@ select {
 /* みんなで遊ぶ（ロビー） */
 input[type="text"], input[type="password"] { display: block; width: 100%; font: inherit; padding: 8px; margin: 6px 0; border: 1px solid var(--bd); border-radius: 8px; background: transparent; color: var(--tx); }
 .mu { color: var(--mu); font-size: 13px; }
-.err { color: #b3392b; }
+.err { color: var(--er); }
 .ok { color: #2f6b50; }
 .tag { font-size: 12px; padding: 1px 6px; border: 1px solid var(--bd); border-radius: 6px; margin-left: 6px; color: var(--mu); }
 code { background: rgba(127, 127, 127, 0.15); padding: 1px 5px; border-radius: 4px; }
@@ -244,3 +247,33 @@ label.chk { display: block; margin: 8px 0; }
 /* ---- ゲーム画面：下の帯（CPUのタイプ・ハンド履歴） ---- */
 .foot { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; font-size: 13px; color: var(--mu); margin-bottom: 10px; }
 .foot button { padding: 6px 10px; font-size: 13px; }
+
+/* ---- 席：名前と位置の印・降りた人・ベット額 ---- */
+.s .sn { display: flex; align-items: center; justify-content: center; gap: 4px; flex-wrap: wrap; }
+.s small { display: block; }
+.pos { font-style: normal; font-size: 10px; font-weight: 700; line-height: 1; padding: 3px 5px; border-radius: 9px; background: rgba(255, 255, 255, 0.18); color: #fff; }
+.pos.pD { background: #f4f4f0; color: #111; } /* ディーラーボタン */
+.pos.pSB, .pos.pBB { background: rgba(224, 180, 76, 0.35); color: #ffe6a8; }
+.s .hc { min-height: 30px; display: flex; align-items: center; justify-content: center; }
+.s .fd { font-size: 12px; opacity: 0.9; letter-spacing: 0.05em; }
+.s em { display: inline-block; min-height: 1.2em; }
+.s em:not(:empty) { margin-top: 3px; padding: 0 8px; border-radius: 10px; background: rgba(0, 0, 0, 0.35); color: #ffd77a; font-weight: 700; }
+
+/* ---- 操作：コールは塗り、レイズは枠（見分けやすく）・自分の番の残り時間 ---- */
+.acts button.rb { background: transparent; color: var(--tx); border: 2px solid var(--ac); }
+.turn { font-size: 15px; font-weight: 700; color: var(--ac); margin-bottom: 6px; }
+.turn.warn { color: var(--er); }
+
+/* ---- 終わったときの知らせ：画面の真ん中に重ねる（スマホで下まで探さなくていいように） ---- */
+#ov:not([hidden]) {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(92vw, 520px);
+  max-height: 90vh;
+  overflow: auto;
+  z-index: 10;
+  margin: 0;
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.55);
+}

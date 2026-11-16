@@ -101,6 +101,8 @@ function fin() {
   G.ask = 0;
   const pl = alive() + 1,
     pt = pl == 1 ? 6 : pl == 2 ? 4 : pl == 3 ? 3 : pl <= 5 ? 2 : pl <= itm() ? 1 : 0;
+  G.place = pl; // 見出しと操作欄を「終わった」表示にする
+  G.done = 1;
   S.n++;
   if (pl == 1) S.w++;
   if (pl <= 5) S.ft++;
@@ -113,7 +115,7 @@ function fin() {
   render();
   $("ov").hidden = 0;
   $("ov").innerHTML =
-    `<h2 style="margin-top:0">${pl == 1 ? "🏆 優勝！" : pl + "位 でフィニッシュ"}</h2><p>${pl <= itm() ? "ITM（入賞）" : "ITM圏外"}${pl <= 5 ? "／ファイナルテーブル" : ""}　エントリー ${G.entries}人（あなたのリエントリー ${h.re}回）</p><p style="color:var(--mu)">参考：サーキットpt（仮配点）${pt}pt／通算 ${S.n}回・優勝${S.w}・FT${S.ft}・ITM${S.itm}</p><button onclick="location.reload()">もう一度</button>`;
+    `<h2 style="margin-top:0">${pl == 1 ? "🏆 優勝！" : pl + "位 でフィニッシュ"}</h2><p>${pl <= itm() ? "ITM（入賞）" : "ITM圏外"}${pl <= 5 ? "／ファイナルテーブル" : ""}　エントリー ${G.entries}人（あなたのリエントリー ${h.re}回）</p><p style="color:var(--mu)">参考：サーキットpt（仮配点）${pt}pt／通算 ${S.n}回・優勝${S.w}・FT${S.ft}・ITM${S.itm}</p><button onclick="location.reload()">もう一度</button><button class=g onclick="$('ov').hidden=1">閉じる（卓を見る）</button>`;
 }
 // ---- 画面の部品（ひとり用・みんなで遊ぶで共通）----
 // 上の情報：小さな枠ごとに並べる。o の値はすべて数（HTML に入れても安全）
@@ -127,8 +129,30 @@ function hdHtml(o) {
     box("残り", `${o.al}人`, `エントリー ${o.en}`) +
     box("入賞", `${o.itm}位まで`) +
     box("平均", `${o.avg}BB`) +
-    (o.spec ? box("あなた", "観戦中", "", "me") : box("あなた", `${o.rk}位`, `${o.st}BB${o.re ? "・リエントリー可" : ""}`, "me")) +
+    (o.spec
+      ? box("あなた", "観戦中", "", "me")
+      : o.done
+        ? box("あなた", o.place ? `${o.place}位` : "—", "終了", "me")
+        : box("あなた", `${o.rk}位`, `${o.st}BB${o.re ? "・リエントリー可" : ""}`, "me")) +
     `</div>`
+  );
+}
+// 席。o の文字（name・sub・lab）は HTML に入れて安全なもの（ひとり用は CPU の名前、みんなで遊ぶは mpClean 済み）
+//   o: { name, col: 名前の色, sub: タイプなどの小さな字, lab: "D SB" などの位置, stack: BB, cards: 手札の HTML, fold, act: 行動中, me, bet: BB（なければ 0） }
+// 位置は小さな印にする。降りた人は手札の代わりに「フォールド」と出す（自分の手札は残す）
+function seatHtml(o) {
+  const pos = String(o.lab || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((x) => `<i class="pos p${x}">${x}</i>`)
+    .join("");
+  const cards = o.fold && !o.me ? '<span class="fd">フォールド</span>' : o.cards || "&nbsp;";
+  return (
+    `<div class="s${o.fold ? " f" : ""}${o.act ? " a" : ""}${o.me ? " h" : ""}">` +
+    `<div class="sn"><b style="color:${o.col || "inherit"}">${o.name}</b>${pos}</div>` +
+    `${o.sub ? `<small>${o.sub}</small>` : ""}<div>${o.stack} BB</div><div class="hc">${cards}</div>` +
+    `<em>${o.bet ? o.bet + "BB" : ""}</em></div>`
   );
 }
 // 自分の番の操作欄。A: 行動を送る関数の名前、X: レイズ額を動かす関数の名前（ひとり用は A / X、みんなで遊ぶは MA / MX）
@@ -160,14 +184,25 @@ function render() {
     [sb, bb, an] = LV[G.lv];
   const rk = [...al].sort((a, b) => b.stack - a.stack).indexOf(h) + 1,
     avg = Math.round(al.reduce((s, p) => s + p.stack, 0) / Math.max(1, al.length));
-  const hs = hdHtml({ lv: G.lv, bb, an, al: al.length, en: G.entries, itm: itm(), avg: fb(avg), rk, st: fb(h.stack), re: G.lv < 2 && !h.re });
+  const hs = hdHtml({ lv: G.lv, bb, an, al: al.length, en: G.entries, itm: itm(), avg: fb(avg), rk, st: fb(h.stack), re: G.lv < 2 && !h.re, done: !h.alive, place: G.place });
   if (G.hs != hs) {
     G.hs = hs;
     $("hd").innerHTML = hs;
     tmr();
   }
   const seat = (p) =>
-    `<div class="s${p.fold ? " f" : ""}${G.req && G.req.p == p ? " a" : ""}${p.hero ? " h" : ""}"><b style="color:${p.col || "inherit"}">${p.name}</b> <small>${p.hero || !G.ty ? "" : p.ty[0]}${p.k && G.ty ? ` 記憶${Math.round(p.mem?.get("hero")?.n || 0)}H` : ""} ${p.lab || ""}${p.alive ? "" : " バスト"}</small><div>${fb(p.stack)} BB</div><div>${p.h ? p.h.map((c) => cd(c, !p.hero && !p.show)).join("") : "&nbsp;"}</div><em>${p.bet ? "bet " + fb(p.bet) : ""}</em></div>`;
+    seatHtml({
+      name: p.name,
+      col: p.col,
+      sub: [p.hero || !G.ty ? "" : p.ty[0], p.k && G.ty ? `記憶${Math.round(p.mem?.get("hero")?.n || 0)}H` : "", p.alive ? "" : "バスト"].filter(Boolean).join(" "),
+      lab: p.lab,
+      stack: fb(p.stack),
+      cards: p.h ? p.h.map((c) => cd(c, !p.hero && !p.show)).join("") : "",
+      fold: p.fold,
+      act: G.req && G.req.p == p,
+      me: p.hero,
+      bet: p.bet ? fb(p.bet) : 0,
+    });
   const pot = (T.ps || []).reduce((s, p) => s + p.tot, 0);
   $("tb").innerHTML = `<div class=row>${T.p
     .concat(T.gone || [])
@@ -185,7 +220,8 @@ function render() {
     G.mn = mn;
     G.mx = mx;
     c = actHtml("A", "X", { toCall: q.toCall, call: fb(Math.min(q.toCall, p.stack)), cur: q.cur, mn, mx, pot: q.pot, f: fb });
-  } else if (G.ask)
+  } else if (G.done) c = '<span class="mu">大会が終わりました</span>';
+  else if (G.ask)
     c =
       '<p>バストしました。リエントリー（開始スタック）しますか？</p><button onclick="reent()">リエントリー</button><button class=g onclick="fin()">終了</button>';
   else if (G.wait && h.stack > 0) c = '<button onclick="nx()">次のハンド ▶</button>';
