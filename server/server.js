@@ -328,6 +328,8 @@ function startServer(opt = {}) {
     );
   backup();
   const backuper = setInterval(backup, 36e5);
+  // スポット：まだ誰も答えていないポストフロップの問題を、少しずつ作り置きする（「次の問題」で待たせない・部屋を止めない）
+  const spotFiller = setInterval(() => rec("spots", () => spots.topUp()), opt.spotFillMs || 2000);
   // 管理用の口：ADMIN_PORT を設定したときだけ開く（"auto" は空いているポート。テスト用）
   const adminPort = env.ADMIN_PORT === "auto" ? 0 : +env.ADMIN_PORT || null;
   return new Promise((resolve) => {
@@ -352,6 +354,7 @@ function startServer(opt = {}) {
             local && local.close();
             accounts.flush();
             clearInterval(backuper);
+            clearInterval(spotFiller);
             for (const id of [...rooms.keys()]) closeRoom(id, "shutdown");
             wss.close();
             server.close(() => {

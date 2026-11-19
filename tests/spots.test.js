@@ -3,7 +3,8 @@ const test = require("node:test");
 const assert = require("node:assert");
 const { startServer } = require("../server/server.js");
 const { openAccounts } = require("../server/accounts.js");
-const { makePreflop, makePostflop, spotKey, cleanAnswer, HAND_POOL, ORDER } = require("../server/spots.js");
+const { makePreflop, makePostflop, spotKey, cleanAnswer, isFacing, openSpots, HAND_POOL, ORDER } = require("../server/spots.js");
+const { openDb } = require("../server/db.js");
 const E = require("../engine.js");
 
 // 再現できる乱数
@@ -120,9 +121,10 @@ test("回答の中身：ポストフロップは、ベットを受けていな�
   assert.ok(cleanAnswer({ action: "allin", comment: "x" }, faced).ok && cleanAnswer({ action: "allin", comment: "x" }, open).ok);
 });
 
-async function boot(t) {
+// fill: 作り置きの間隔（ms）。ふだんは止めておく（問題の数を数えるテストが、裏で増えた問題で狂わないように）
+async function boot(t, fill = 1e9) {
   const accounts = openAccounts();
-  const srv = await startServer({ PORT: 0, HOST: "127.0.0.1", quiet: 1, DB_FILE: ":memory:", accounts, store: { get: () => null, set() {} } });
+  const srv = await startServer({ PORT: 0, HOST: "127.0.0.1", quiet: 1, DB_FILE: ":memory:", accounts, store: { get: () => null, set() {} }, spotFillMs: fill });
   t.after(() => srv.close());
   const origin = `http://127.0.0.1:${srv.port}`;
   const member = (name) => {
@@ -132,9 +134,9 @@ async function boot(t) {
   };
   const call = (m, p, o = {}) =>
     fetch(origin + "/" + p, {
-      method: o.body ? "POST" : "GET",
+      method: o.body || o.raw != null ? "POST" : "GET",
       headers: { origin: o.origin || origin, "content-type": "application/json", ...(m ? { cookie: "alp_sid=" + m.sid } : {}) },
-      body: o.body && JSON.stringify(o.body),
+      body: o.raw != null ? o.raw : o.body && JSON.stringify(o.body), // raw: 送る文字をそのまま
     }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => null) }));
   return { member, call };
 }
@@ -182,4 +184,56 @@ test("回答：答えるまで他の人の答えは見えない。1人1回で直
   // ない問題
   assert.equal((await call(k, "api/spots/one?id=999")).status, 404);
   assert.equal((await call(k, "api/spots/answer", { body: { id: 999, action: "fold", comment: "x" } })).status, 404);
+});
+
+test("回答：中身が null などでもサーバーは落ちず、400 を返す", async (t) => {
+  const { member, call } = await boot(t);
+  const k = member("Kaina");
+  // null・数・文字は「読めない」、配列は id がないので「ない問題」
+  for (const [raw, want] of [["null", 400], ["1", 400], ['"x"', 400], ["[]", 404]]) assert.equal((await call(k, "api/spots/answer", { raw })).status, want, raw);
+  // そのあとも動いている
+  assert.equal((await call(k, "api/spots")).status, 200);
+});
+
+test("問題作り：重いポストフロップは時間で打ち切り、作れなければもう一方の種類で作る。作り置きは足りないときだけ", () => {
+  const db = openDb(":memory:"), sp = openSpots(db);
+  // 使える時間が 0 なら、ポストフロップは作れず、プリフロップで作る
+  const id = sp.create(Math.random, "postflop", 0);
+  assert.equal(sp.get(id).kind, "preflop");
+  // 作り置き：まだ誰も答えていないポストフロップが 3 問になるまで作る
+  for (let i = 0; i < 400 && sp.list("u").filter((s) => s.kind == "postflop").length < 3; i++) sp.topUp(3, 50);
+  assert.equal(sp.list("u").filter((s) => s.kind == "postflop").length, 3);
+  assert.equal(sp.topUp(3, 50), null, "足りていれば作らない");
+});
+
+test("一覧：未回答を先に並べてから上限で切る。全体の数も返す", () => {
+  const db = openDb(":memory:"), sp = openSpots(db);
+  const R = rng(3), ids = [];
+  for (let i = 0; i < 6; i++) ids.push(sp.create(R, "preflop"));
+  // 古い 3 問だけ未回答にする
+  for (const id of ids.slice(3)) sp.answer(id, "u", { action: "allin", size_bb: null, comment: "x" });
+  assert.deepEqual(sp.list("u", 3).map((s) => s.id), ids.slice(0, 3).reverse(), "上限 3 でも、未回答の古い問題が出る");
+  assert.deepEqual(sp.totals("u"), { total: 6, done: 3 });
+});
+
+test("ベットを受けているかは、丸める前の額で決める（ごく小さな上乗せでも、チェック・ベットにしない）", () => {
+  const s = { to_call_bb: 0, facing: 1, min_raise_bb: 2, max_bb: 20 };
+  assert.ok(isFacing(s));
+  assert.ok(cleanAnswer({ action: "check", comment: "x" }, s).error);
+  assert.ok(cleanAnswer({ action: "fold", comment: "x" }, s).ok);
+  // 印のない古い問題は、to_call_bb で見る
+  assert.ok(!isFacing({ to_call_bb: 0 }));
+  // 作った問題には印が付き、to_call_bb と合う
+  for (let seed = 1, n = 0; n < 50; seed++) {
+    const p = makePostflop(seed);
+    if (!p) continue;
+    n++;
+    assert.equal(p.facing, p.to_call_bb > 0 ? 1 : p.facing);
+  }
+  assert.equal(makePreflop(rng(1)).facing, 1);
+});
+
+test("engine の R は、withRandom の中では差し替えた乱数を返す", () => {
+  const a = E.withRandom(E.seeded(5), () => [E.R(), E.R()]), b = E.withRandom(E.seeded(5), () => [E.R(), E.R()]);
+  assert.deepEqual(a, b);
 });

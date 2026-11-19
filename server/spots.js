@@ -110,6 +110,7 @@ function makePreflop(R = Math.random, want = {}) {
     seats,
     actions,
     facing_bb: facing, // 今のベット額（この額にそろえればコール）
+    facing: toCall > 0 ? 1 : 0, // ベットを受けているか
     to_call_bb: toCall,
     in_bb: heroIn, // 自分がもう出している額
     min_raise_bb: minRaise,
@@ -197,6 +198,8 @@ function snapPostflop(v, T, bb, seed) {
     seats,
     actions,
     facing_bb: f(facing),
+    // ベットを受けているか（丸める前の額で決める。ごく小さな上乗せでも to_call_bb が 0 に丸まるため）
+    facing: toCall > 0 ? 1 : 0,
     to_call_bb: f(toCall),
     in_bb: f(p.bet),
     min_raise_bb: f(facing + c.minR),
@@ -222,7 +225,11 @@ function openSpots(db, { now = () => Date.now() } = {}) {
     list: db.prepare(`SELECT s.id, s.kind, s.source, s.situation, s.created_at,
         (SELECT COUNT(*) FROM spot_answers a WHERE a.spot_id = s.id) AS answers,
         (SELECT a.action FROM spot_answers a WHERE a.spot_id = s.id AND a.uid = ?) AS mine
-      FROM spots s ORDER BY s.id DESC LIMIT ?`),
+      FROM spots s ORDER BY (mine IS NULL) DESC, s.id DESC LIMIT ?`),
+    // 一覧の上限で切る前の数（画面の「回答済み x / y 問」用）
+    totals: db.prepare(`SELECT (SELECT COUNT(*) FROM spots) AS total, (SELECT COUNT(*) FROM spot_answers WHERE uid = ?) AS done`),
+    // 作り置き：まだ誰も答えていないポストフロップの問題の数
+    spare: db.prepare(`SELECT COUNT(*) AS n FROM spots s WHERE s.kind = 'postflop' AND NOT EXISTS (SELECT 1 FROM spot_answers a WHERE a.spot_id = s.id)`),
     // 次の問題：自分が答えていないもののうち、答えた人が多いもの → 古いもの
     next: db.prepare(`SELECT s.id FROM spots s
       WHERE NOT EXISTS (SELECT 1 FROM spot_answers a WHERE a.spot_id = s.id AND a.uid = ?)
@@ -234,20 +241,34 @@ function openSpots(db, { now = () => Date.now() } = {}) {
   };
   // 新しい問題を作る（同じ問題がもうあれば作り直す）。プリフロップとポストフロップを半々で
   // ポストフロップはシードを決めて1ハンド進め、あなたの番まで来なければ次のシードで（同じシードなら同じ場面）
-  function create(R = Math.random, kind = R() < 0.5 ? "preflop" : "postflop") {
-    for (let i = 0; i < 60; i++) {
+  // ポストフロップは1ハンド丸ごと CPU に打たせるので重い。部屋の進行を止めないよう、使ってよい時間（budgetMs）で打ち切る
+  // （足りない分は topUp が空いているときに作り置きする）。作れなかった種類は、もう一方で作り直す
+  const clock = () => Date.now();
+  function makeOne(R, kind, budgetMs) {
+    const until = clock() + budgetMs;
+    for (let i = 0; i < 60 && clock() <= until; i++) {
       let s = null;
       if (kind == "preflop") s = makePreflop(R);
-      else for (let k = 0; k < 400 && !s; k++) s = makePostflop(Math.floor(R() * 2 ** 31));
+      else while (!s && clock() <= until) s = makePostflop(Math.floor(R() * 2 ** 31));
       if (!s) continue;
       const r = st.add.run(s.kind, "auto", JSON.stringify(s), spotKey(s), null, now());
       if (r.changes) return Number(r.lastInsertRowid);
     }
     return null;
   }
+  function create(R = Math.random, kind = R() < 0.5 ? "preflop" : "postflop", budgetMs = 25) {
+    return makeOne(R, kind, budgetMs) || makeOne(R, kind == "preflop" ? "postflop" : "preflop", budgetMs);
+  }
+  // 作り置き：まだ誰も答えていないポストフロップの問題が keep 問より少なければ、budgetMs だけ使って作る（サーバーが定期的に呼ぶ）
+  function topUp(keep = 3, budgetMs = 10, R = Math.random) {
+    if (st.spare.get().n >= keep) return null;
+    return makeOne(R, "postflop", budgetMs);
+  }
   return {
     create,
+    topUp,
     list: (uid, limit = 200) => st.list.all(uid, limit).map((r) => ({ ...r, situation: JSON.parse(r.situation), mine: r.mine || null })),
+    totals: (uid) => st.totals.get(uid),
     next(uid, R) {
       const r = st.next.get(uid);
       return r ? r.id : create(R);
@@ -266,13 +287,15 @@ function openSpots(db, { now = () => Date.now() } = {}) {
   };
 }
 
+// ベットを受けているか（facing の印がない古い問題は、to_call_bb で見る）
+const isFacing = (s) => (s.facing != null ? !!s.facing : s.to_call_bb > 0);
 // 回答の中身を確かめる。戻り値 { ok } か { error }
 function cleanAnswer(m, s) {
   if (!m || typeof m != "object") return { error: "送信内容が読めません" };
   const action = m.action;
   if (!ACTIONS.includes(action)) return { error: "行動を選んでください" };
   // ベットを受けているか（受けていれば フォールド・コール・レイズ、いなければ チェック・ベット。オールインはいつでも）
-  const facing = s.to_call_bb > 0;
+  const facing = isFacing(s);
   if ((action == "fold" || action == "call" || action == "raise") && !facing) return { error: "ここではチェックかベットです" };
   if ((action == "check" || action == "bet") && facing) return { error: "ベットを受けているので、フォールド・コール・レイズです" };
   const comment = typeof m.comment == "string" ? m.comment.trim().replace(/\r\n?/g, "\n") : "";
@@ -309,20 +332,27 @@ function createSpotsApi({ auth, accounts, spots, json, log }) {
           body += c;
           if (body.length > 16 * 1024) req.destroy();
         });
+        // ここは外側の try の外（あとで呼ばれる）なので、自分で受け止める。投げたままだとプロセスごと落ちる
         req.on("end", () => {
-          let m;
           try {
-            m = JSON.parse(body);
+            let m;
+            try {
+              m = JSON.parse(body);
+            } catch (e) {
+              return json(res, 400, { why: "送信内容が読めません" });
+            }
+            if (!m || typeof m != "object") return json(res, 400, { why: "送信内容が読めません" });
+            const id = +m.id, s = Number.isInteger(id) && spots.get(id);
+            if (!s) return json(res, 404, { why: "その問題はありません" });
+            const c = cleanAnswer(m, s.situation);
+            if (c.error) return json(res, 400, { why: c.error });
+            if (!spots.answer(id, me.id, c.ok)) return json(res, 409, { why: "もう回答しています（回答は1人1回です）" });
+            log && log("spot answer", id, me.id, c.ok.action);
+            json(res, 200, { ok: 1 });
           } catch (e) {
-            return json(res, 400, { why: "送信内容が読めません" });
+            log && log("spots error", e.stack || e.message);
+            if (!res.headersSent) json(res, 500, { why: "保存できませんでした" });
           }
-          const id = +m.id, s = Number.isInteger(id) && spots.get(id);
-          if (!s) return json(res, 404, { why: "その問題はありません" });
-          const c = cleanAnswer(m, s.situation);
-          if (c.error) return json(res, 400, { why: c.error });
-          if (!spots.answer(id, me.id, c.ok)) return json(res, 409, { why: "もう回答しています（回答は1人1回です）" });
-          log && log("spot answer", id, me.id, c.ok.action);
-          json(res, 200, { ok: 1 });
         });
         return true;
       }
@@ -331,7 +361,8 @@ function createSpotsApi({ auth, accounts, spots, json, log }) {
       if (!me) return json(res, 401, { why: "ログインしてください" }), true;
       if (p === "/api/spots") {
         // 一覧では、まだ答えていない問題の手札も見せてよい（問題そのものなので）。回答の中身は出さない
-        return json(res, 200, { me: { id: me.id, name: me.name }, spots: spots.list(me.id) }), true;
+        // 未回答を先に並べてから上限で切る。全体の数（total・done）も添える
+        return json(res, 200, { me: { id: me.id, name: me.name }, spots: spots.list(me.id), ...spots.totals(me.id) }), true;
       }
       if (p === "/api/spots/next") {
         // 新しく作ることがあるので、回数を制限する
@@ -357,4 +388,4 @@ function createSpotsApi({ auth, accounts, spots, json, log }) {
   };
 }
 
-module.exports = { makePostflop, makePreflop, spotKey, openSpots, cleanAnswer, createSpotsApi, HAND_POOL, HERO_POS, STACKS, ORDER };
+module.exports = { makePostflop, makePreflop, spotKey, openSpots, cleanAnswer, isFacing, createSpotsApi, HAND_POOL, HERO_POS, STACKS, ORDER };

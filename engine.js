@@ -1446,7 +1446,8 @@ function meStats(m) {
 }
 
 const api = {
-  R, SU, RK, LV, CPU0, TY, TYC, NM, NC, HN, REC_KEYS, BIGZ, MEMK, MEK, ME_DECAY, ME_PRIOR, ME_ROWS,
+  R: () => R(), // 今の乱数（withRandom の中では差し替えた乱数）
+  SU, RK, LV, CPU0, TY, TYC, NM, NC, HN, REC_KEYS, BIGZ, MEMK, MEK, ME_DECAY, ME_PRIOR, ME_ROWS,
   withRandom, seeded, fromType, shf, alive, itm, cd, e5, best, hcls, pre, draw, tier, track, newObs, obs, ai2,
   hand, bust, bal, advanceLevel, autoAct, playHand, soloSetup, loadMem, saveMem, meBlend, meStats,
   histView, histText, cardText, fileStamp, analyze, analyzeRows, posName, replayFrames, handInfo, seatRing, ringSeats, potOf,

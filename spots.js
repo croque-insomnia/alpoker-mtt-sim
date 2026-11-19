@@ -47,9 +47,10 @@ $("nx1").onclick = $("nx2").onclick = nextSpot;
 
 // ---- 一覧 ----
 async function showList() {
-  const { spots } = await get("api/spots");
-  const done = spots.filter((s) => s.mine).length;
-  $("cnt").textContent = spots.length ? `回答済み ${done} / ${spots.length} 問` : "まだ問題がありません。「次の問題に答える」で最初の問題が作られます";
+  const r = await get("api/spots"), spots = r.spots;
+  // 数は一覧の上限で切る前のもの（古い問題まで含めた全体）
+  const total = r.total != null ? r.total : spots.length, done = r.done != null ? r.done : spots.filter((s) => s.mine).length;
+  $("cnt").textContent = spots.length ? `回答済み ${done} / ${total} 問` + (total > spots.length ? `（一覧は未回答から ${spots.length} 問）` : "") : "まだ問題がありません。「次の問題に答える」で最初の問題が作られます";
   // 答えていないものを上に（その中は新しい順）
   const list = spots.slice().sort((a, b) => !!a.mine - !!b.mine || b.id - a.id);
   const t = $("ls");
@@ -162,7 +163,8 @@ function drawForm(s) {
   const b = $("btns");
   b.textContent = "";
   // ベットを受けていれば フォールド・コール・レイズ、受けていなければ チェック・ベット（オールインはいつでも）
-  const facing = s.to_call_bb > 0;
+  // ベットを受けているか（丸める前の額で決めた印。印のない古い問題は to_call_bb で見る）
+  const facing = s.facing != null ? !!s.facing : s.to_call_bb > 0;
   const opts = facing ? [["fold", "フォールド"]] : [["check", "チェック"]];
   if (facing && s.to_call_bb < s.max_bb - s.in_bb) opts.push(["call", `${callWord(s)} ${fb(s.facing_bb)}BB`]);
   if (s.min_raise_bb < s.max_bb) opts.push([facing ? "raise" : "bet", facing ? "レイズ" : "ベット"]);
