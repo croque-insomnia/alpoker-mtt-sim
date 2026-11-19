@@ -3,7 +3,8 @@ const test = require("node:test");
 const assert = require("node:assert");
 const { startServer } = require("../server/server.js");
 const { openAccounts } = require("../server/accounts.js");
-const { makePreflop, spotKey, cleanAnswer, HAND_POOL, ORDER } = require("../server/spots.js");
+const { makePreflop, makePostflop, spotKey, cleanAnswer, HAND_POOL, ORDER } = require("../server/spots.js");
+const E = require("../engine.js");
 
 // 再現できる乱数
 const rng = (seed) => () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
@@ -58,6 +59,67 @@ test("回答の中身：コメント必須・行動・レイズ額の範囲", ()
   assert.equal(cleanAnswer({ action: "call", size: 99, comment: "x" }, s).ok.size_bb, null);
 });
 
+test("ポストフロップ：同じシードなら同じ場面（配札も CPU の動きも）。乱数の差し替えは外に漏れない", () => {
+  let found = 0;
+  for (let seed = 1; seed < 3000 && found < 20; seed++) {
+    const a = makePostflop(seed);
+    if (!a) continue;
+    found++;
+    assert.deepEqual(makePostflop(seed), a, "seed " + seed);
+    assert.equal(spotKey(a), spotKey(makePostflop(seed)));
+  }
+  assert.ok(found >= 20, "シードのうち、場面になるものがある: " + found);
+  // withRandom のあとは、ふだんの乱数に戻っている（同じシードでも、外のシャッフルは毎回違う）
+  const x = JSON.stringify(E.shf([...Array(52).keys()])), y = JSON.stringify(E.shf([...Array(52).keys()]));
+  assert.notEqual(x, y);
+});
+
+test("ポストフロップ：場面のつじつま（ボード・手札・持ち点とポット・行動の流れ・自明な場面を出さない）", () => {
+  const streets = {};
+  let facing = 0, n = 0;
+  for (let seed = 5000; seed < 12000; seed++) {
+    const s = makePostflop(seed);
+    if (!s) continue;
+    n++;
+    streets[s.street] = (streets[s.street] || 0) + 1;
+    assert.equal(s.board.length, { flop: 3, turn: 4, river: 5 }[s.street]);
+    const cards = s.board.concat(s.hero.hand);
+    assert.equal(new Set(cards).size, cards.length, "カードが重ならない");
+    // 出た額の合計 = ポット（0.1 単位の丸め分だけずれてよい）
+    const out = s.seats.reduce((t, x) => t + x.stack_bb - x.now_bb, 0);
+    assert.ok(Math.abs(out - s.pot_bb) < 0.6, `pot ${s.pot_bb} vs ${out}`);
+    const me = s.seats.find((x) => x.pos == s.hero.position);
+    assert.ok(me && !me.fold && !me.allin && me.now_bb > 0);
+    assert.ok(s.seats.filter((x) => !x.fold).length >= 2);
+    assert.ok(s.actions.some((a) => a.street == "preflop") && s.actions.every((a) => ["preflop", "flop", "turn", "river"].includes(a.street)));
+    assert.ok(s.max_bb > 0 && s.min_raise_bb > s.facing_bb);
+    if (s.to_call_bb > 0) {
+      facing++;
+      assert.ok(E.tier(s.hero.hand, s.board) >= 1 || E.draw(s.hero.hand, s.board), "ベットを受けていて、何もない手は出さない");
+    }
+  }
+  assert.ok(n >= 100 && streets.flop && streets.turn && streets.river, JSON.stringify(streets));
+  assert.ok(facing > n * 0.1, `ベットを受ける場面もある ${facing}/${n}`);
+});
+
+test("回答の中身：ポストフロップは、ベットを受けていなければ チェック・ベット、受けていれば フォールド・コール・レイズ", () => {
+  let open = null, faced = null;
+  for (let seed = 1; seed < 5000 && !(open && faced); seed++) {
+    const s = makePostflop(seed);
+    if (s && s.to_call_bb > 0) faced ||= s;
+    else if (s) open ||= s;
+  }
+  assert.ok(cleanAnswer({ action: "check", comment: "x" }, open).ok);
+  assert.ok(cleanAnswer({ action: "fold", comment: "x" }, open).error);
+  assert.ok(cleanAnswer({ action: "call", comment: "x" }, open).error);
+  assert.equal(cleanAnswer({ action: "bet", size: open.min_raise_bb, comment: "x" }, open).ok.size_bb, open.min_raise_bb);
+  assert.ok(cleanAnswer({ action: "bet", size: 0.5, comment: "x" }, open).error);
+  assert.ok(cleanAnswer({ action: "check", comment: "x" }, faced).error);
+  assert.ok(cleanAnswer({ action: "bet", size: 99, comment: "x" }, faced).error);
+  assert.ok(cleanAnswer({ action: "call", comment: "x" }, faced).ok);
+  assert.ok(cleanAnswer({ action: "allin", comment: "x" }, faced).ok && cleanAnswer({ action: "allin", comment: "x" }, open).ok);
+});
+
 async function boot(t) {
   const accounts = openAccounts();
   const srv = await startServer({ PORT: 0, HOST: "127.0.0.1", quiet: 1, DB_FILE: ":memory:", accounts, store: { get: () => null, set() {} } });
@@ -89,15 +151,17 @@ test("回答：答えるまで他の人の答えは見えない。1人1回で直
   const one = await call(k, "api/spots/one?id=" + id);
   assert.equal(one.body.answered, 0);
   assert.equal(one.body.answers, undefined);
+  // 降りる答え：ベットを受けていればフォールド、受けていなければチェック（問題はプリフロップかポストフロップのどちらか）
+  const pass = one.body.spot.situation.to_call_bb > 0 ? "fold" : "check";
   // 別のサイトからの回答は断る
-  assert.equal((await call(k, "api/spots/answer", { body: { id, action: "fold", comment: "x" }, origin: "https://evil.example" })).status, 401);
-  assert.equal((await call(k, "api/spots/answer", { body: { id, action: "fold", comment: "" } })).status, 400);
-  assert.equal((await call(k, "api/spots/answer", { body: { id, action: "fold", comment: "弱い" } })).status, 200);
+  assert.equal((await call(k, "api/spots/answer", { body: { id, action: pass, comment: "x" }, origin: "https://evil.example" })).status, 401);
+  assert.equal((await call(k, "api/spots/answer", { body: { id, action: pass, comment: "" } })).status, 400);
+  assert.equal((await call(k, "api/spots/answer", { body: { id, action: pass, comment: "弱い" } })).status, 200);
   // 2回目は断る（直せない）
   assert.equal((await call(k, "api/spots/answer", { body: { id, action: "allin", comment: "やっぱり" } })).status, 409);
   const after = await call(k, "api/spots/one?id=" + id);
   assert.equal(after.body.answered, 1);
-  assert.deepEqual(after.body.answers.map((a) => [a.name, a.action, a.comment, a.me]), [["Kaina", "fold", "弱い", 1]]);
+  assert.deepEqual(after.body.answers.map((a) => [a.name, a.action, a.comment, a.me]), [["Kaina", pass, "弱い", 1]]);
   assert.ok(!("uid" in after.body.answers[0]), "アカウント ID は出さない");
   // Croque が答えていないうちは、Kaina の答えは見えない。次の問題は Kaina が答えたもの
   const cv = await call(c, "api/spots/one?id=" + id);
@@ -114,7 +178,7 @@ test("回答：答えるまで他の人の答えは見えない。1人1回で直
   const L = (await call(m, "api/spots")).body.spots;
   assert.deepEqual(L.map((s) => [s.id, s.answers, s.mine]), [[id2, 0, null], [id, 2, null]]);
   const Lk = (await call(k, "api/spots")).body.spots;
-  assert.equal(Lk.find((s) => s.id == id).mine, "fold");
+  assert.equal(Lk.find((s) => s.id == id).mine, pass);
   // ない問題
   assert.equal((await call(k, "api/spots/one?id=999")).status, 404);
   assert.equal((await call(k, "api/spots/answer", { body: { id: 999, action: "fold", comment: "x" } })).status, 404);

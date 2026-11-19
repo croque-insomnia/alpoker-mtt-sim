@@ -8,6 +8,7 @@
 //   POST api/spots/answer     … 回答 { id, action: fold|call|raise|allin, size, comment }
 "use strict";
 const crypto = require("crypto");
+const E = require("../engine.js");
 
 // ---- 問題を作る（プリフロップ・5-Max） ----
 // 判断が割れる場面だけを出す（自明な AA・72o などは出さない）
@@ -116,15 +117,103 @@ function makePreflop(R = Math.random, want = {}) {
     pot_bb: pot,
   };
 }
+// ---- ポストフロップ（自動）：ゲームと同じ CPU で1ハンドを進め、あなたの番で止めて写す ----
+// 乱数はシード1つから作る（配札・席順・CPU の個人差と行動のすべて）。同じシードなら、いつ作っても同じ場面になる
+// あなたの手前の行動（プリフロップなど）も、あなたの席に「バランス」タイプの CPU の判断をさせて進める
+const STREET = { 0: "preflop", 3: "flop", 4: "turn", 5: "river" };
+const ACT_OF = { f: "fold", k: "check", c: "call", b: "bet", r: "raise" };
+function makePostflop(seed) {
+  const R = E.seeded(seed);
+  return E.withRandom(R, () => {
+    const lv = Math.floor(R() * 6), // レベル 1〜6（アンティの重さが変わる）
+      [, bb] = E.LV[lv];
+    // 止めるストリート：フロップ 45%・ターン 35%・リバー 20%
+    const u = R(),
+      target = u < 0.45 ? 3 : u < 0.8 ? 4 : 5;
+    const depth = (lo, hi) => Math.round((lo + R() * (hi - lo)) * bb);
+    const P = [];
+    const bal = E.TY.find((t) => t.name == "バランス");
+    P.push({ ...E.fromType(bal), id: 0, oid: "hero", name: "あなた", hero: 1, stack: depth(12, 40), alive: 1 });
+    for (let i = 1; i < 5; i++) P.push({ ...E.fromType(E.TYC[Math.floor(R() * E.TYC.length)]), id: i, oid: "c" + i, name: "c" + i, stack: depth(8, 50), alive: 1 });
+    const T = { p: E.shf(P.slice()), btn: -1 };
+    // 大会の途中（40人中25人が残り、入賞は8人）として CPU に判断させる（最終卓やバブルの特別な動きにしない）
+    const rest = Array.from({ length: 20 }, (_, i) => ({ id: 100 + i, alive: 1 }));
+    const g = { P: P.concat(rest), tables: [T], lv, entries: 40, hist: [] };
+    const h = E.hand(g, T);
+    for (let r = h.next(); !r.done; ) {
+      const v = r.value;
+      if (v.k != "hero") {
+        r = h.next();
+        continue;
+      }
+      if (v.c.board.length == target) {
+        // ベットを受けていない場面（チェックで回ってきた・先に打つ）は多く出がちなので、半分は捨てて次のシードへ
+        // （この判断もシードの乱数で決めるので、同じシードなら同じ結果）
+        if (!(v.c.toCall > 0) && R() < 0.5) return null;
+        return snapPostflop(v, T, bb, seed);
+      }
+      if (v.c.board.length > target) return null;
+      r = h.next(E.ai2(v.p, v.c));
+    }
+    return null; // あなたが途中で降りた・ハンドが終わった
+  });
+}
+// あなたの番の場面を、問題の形にする。判断が自明な場面（何もない手でベットを受けている、など）は null
+function snapPostflop(v, T, bb, seed) {
+  const { p, c, H } = v,
+    ps = T.ps,
+    n = ps.length,
+    B = c.board.slice();
+  const f = (x) => r1(x / bb);
+  const facing = c.cur,
+    toCall = Math.min(c.toCall, p.stack);
+  // 降りるかどうかが自明な場面は出さない：ベットを受けていて、ワンペアもドローもない
+  if (toCall > 0 && E.tier(p.h, B) < 1 && !E.draw(p.h, B)) return null;
+  if (!p.stack || ps.filter((q) => !q.fold).length < 2) return null;
+  const posOf = (i) => {
+    const x = E.posName(i, n);
+    return x == "D" ? "BTN" : x;
+  };
+  const hi = ps.indexOf(p);
+  const seats = ps.map((q, i) => ({
+    pos: posOf(i),
+    stack_bb: f(H.seats[i].st), // 配札前の持ち点
+    now_bb: f(q.stack), // 今の持ち点
+    bet_bb: f(q.bet), // このストリートで出している額
+    fold: q.fold ? 1 : 0,
+    allin: q.allin ? 1 : 0,
+  }));
+  const actions = H.acts.map((a) => ({ street: STREET[a.s], pos: posOf(a.i), action: ACT_OF[a.a], to_bb: f(a.to), allin: a.ai ? 1 : 0 }));
+  const pot = ps.reduce((t, q) => t + q.tot, 0);
+  return {
+    kind: "postflop",
+    scenario: "postflop",
+    seed,
+    street: STREET[B.length],
+    table_size: n,
+    ante_bb: f(H.an),
+    board: B,
+    hero: { position: posOf(hi), stack_bb: f(H.seats[hi].st), hand: p.h.slice(), cls: E.hcls(p.h) },
+    seats,
+    actions,
+    facing_bb: f(facing),
+    to_call_bb: f(toCall),
+    in_bb: f(p.bet),
+    min_raise_bb: f(facing + c.minR),
+    max_bb: f(p.bet + p.stack),
+    pot_bb: f(pot), // このストリートのベットも含む
+  };
+}
 // 同じ問題かを見分ける目印（スートや相手の細かい持ち点は無視：シナリオ・位置・深さ・手・オープンした人・3bet した人）
 function spotKey(s) {
+  if (s.kind == "postflop") return crypto.createHash("sha256").update("postflop|" + s.seed).digest("hex").slice(0, 32);
   const who = (s.actions || []).filter((a) => a.action == "raise").map((a) => a.pos + a.to_bb).join(",");
   const k = [s.kind, s.scenario, s.hero.position, s.hero.stack_bb, s.hero.cls, who].join("|");
   return crypto.createHash("sha256").update(k).digest("hex").slice(0, 32);
 }
 
 // ---- 保存と読み出し ----
-const ACTIONS = ["fold", "call", "raise", "allin"];
+const ACTIONS = ["fold", "check", "call", "bet", "raise", "allin"];
 function openSpots(db, { now = () => Date.now() } = {}) {
   const st = {
     add: db.prepare("INSERT OR IGNORE INTO spots (kind, source, situation, hash, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)"),
@@ -143,11 +232,15 @@ function openSpots(db, { now = () => Date.now() } = {}) {
     count: db.prepare("SELECT COUNT(*) AS n FROM spot_answers WHERE spot_id = ?"),
     answer: db.prepare("INSERT OR IGNORE INTO spot_answers (spot_id, uid, action, size_bb, comment, answered_at) VALUES (?, ?, ?, ?, ?, ?)"),
   };
-  // 新しいプリフロップの問題を作る（同じ問題がもうあれば作り直す）
-  function create(R = Math.random) {
+  // 新しい問題を作る（同じ問題がもうあれば作り直す）。プリフロップとポストフロップを半々で
+  // ポストフロップはシードを決めて1ハンド進め、あなたの番まで来なければ次のシードで（同じシードなら同じ場面）
+  function create(R = Math.random, kind = R() < 0.5 ? "preflop" : "postflop") {
     for (let i = 0; i < 60; i++) {
-      const s = makePreflop(R);
-      const r = st.add.run("preflop", "auto", JSON.stringify(s), spotKey(s), null, now());
+      let s = null;
+      if (kind == "preflop") s = makePreflop(R);
+      else for (let k = 0; k < 400 && !s; k++) s = makePostflop(Math.floor(R() * 2 ** 31));
+      if (!s) continue;
+      const r = st.add.run(s.kind, "auto", JSON.stringify(s), spotKey(s), null, now());
       if (r.changes) return Number(r.lastInsertRowid);
     }
     return null;
@@ -178,17 +271,21 @@ function cleanAnswer(m, s) {
   if (!m || typeof m != "object") return { error: "送信内容が読めません" };
   const action = m.action;
   if (!ACTIONS.includes(action)) return { error: "行動を選んでください" };
+  // ベットを受けているか（受けていれば フォールド・コール・レイズ、いなければ チェック・ベット。オールインはいつでも）
+  const facing = s.to_call_bb > 0;
+  if ((action == "fold" || action == "call" || action == "raise") && !facing) return { error: "ここではチェックかベットです" };
+  if ((action == "check" || action == "bet") && facing) return { error: "ベットを受けているので、フォールド・コール・レイズです" };
   const comment = typeof m.comment == "string" ? m.comment.trim().replace(/\r\n?/g, "\n") : "";
   if (!comment) return { error: "理由のコメントを書いてください" };
   if (comment.length > 500) return { error: "コメントは500字までです" };
   let size_bb = null;
-  if (action == "raise") {
+  if (action == "raise" || action == "bet") {
     size_bb = +m.size;
-    if (!(s.min_raise_bb < s.max_bb)) return { error: "ここではレイズできません（オールインだけです）" };
-    if (!Number.isFinite(size_bb) || size_bb < s.min_raise_bb || size_bb >= s.max_bb) return { error: `レイズ額は ${s.min_raise_bb}BB 以上、オールイン（${s.max_bb}BB）より小さくしてください` };
+    const w = action == "bet" ? "ベット" : "レイズ";
+    if (!(s.min_raise_bb < s.max_bb)) return { error: `ここでは${w}できません（オールインだけです）` };
+    if (!Number.isFinite(size_bb) || size_bb < s.min_raise_bb || size_bb >= s.max_bb) return { error: `${w}額は ${s.min_raise_bb}BB 以上、オールイン（${s.max_bb}BB）より小さくしてください` };
     size_bb = r1(size_bb);
   }
-  if (action == "call" && !(s.to_call_bb > 0)) return { error: "ここではコールできません" };
   return { ok: { action, size_bb, comment } };
 }
 
@@ -260,4 +357,4 @@ function createSpotsApi({ auth, accounts, spots, json, log }) {
   };
 }
 
-module.exports = { makePreflop, spotKey, openSpots, cleanAnswer, createSpotsApi, HAND_POOL, HERO_POS, STACKS, ORDER };
+module.exports = { makePostflop, makePreflop, spotKey, openSpots, cleanAnswer, createSpotsApi, HAND_POOL, HERO_POS, STACKS, ORDER };
