@@ -61,15 +61,17 @@ sudo apt update && sudo apt upgrade -y && sudo apt install -y unattended-upgrade
 [ -f /var/run/reboot-required ] && sudo reboot
 ```
 
-## 4. Node 22・Caddy・git
+## 4. Node 22・Caddy・git・組み立ての道具
 
 Ubuntu 標準の Node は古いので NodeSource から入れる。
 
 ```bash
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt install -y nodejs caddy git
+sudo apt install -y nodejs caddy git build-essential python3
 node -v                            # v22. で始まれば OK
 ```
+
+`build-essential`・`python3` は、`better-sqlite3`（SQLite の部品）をその場で組み立てるための道具。ふつうは出来上がりのものが落ちてくるので使わないが、落ちてこなかったときに `npm ci` が `not found: make` で止まる（2026-11 に一度起きた）。最初から入れておく。
 
 npm の「新しい版があります」というお知らせは無視してよい（Node 22 に付いてくる版のまま使う）。
 
@@ -202,6 +204,12 @@ cd /opt/alpoker-mtt-sim && npm run admin -- invite admin
 cd /opt/alpoker-mtt-sim && sudo git pull && sudo npm ci --omit=dev && sudo systemctl restart alpoker
 ```
 
+`npm ci` は、入っている部品（`node_modules`）を一度消してから入れ直す。途中で失敗すると部品がない状態で残り、サーバーが起動できずにサイトが 502 になる。
+
+- `npm ci` が `npm error` で終わったら、`restart` はせず、エラーの最後の行を見る（`not found: make` なら手順 4 の `build-essential` を入れてからやり直す）
+- 502 になったときは、`sudo journalctl -u alpoker -n 50 --no-pager` で理由を見る。`Cannot find module` なら、部品が入っていない（`npm ci` をやり直す）
+- 依存パッケージ（`package.json`・`package-lock.json`）が変わっていない更新なら、`npm ci` は省いて `sudo git pull && sudo systemctl restart alpoker` だけでよい
+
 設定ファイル（`deploy/` の中身）を変えたときは、手順 5・6 の `cp` をやり直して、`sudo systemctl daemon-reload`（service を変えたとき）・`sudo systemctl reload caddy`（Caddyfile を変えたとき）。
 
 ## 記録の DB とバックアップ
@@ -219,7 +227,7 @@ cd /opt/alpoker-mtt-sim && sudo git pull && sudo npm ci --omit=dev && sudo syste
   ```
 - **手元にも写しを取りたいとき**：`scp kaina@<VPSのIP>:/var/lib/alpoker/backups/alpoker-日付.db .`（読めなければ VPS 上で `sudo cp` してから）
 - 以前のハンド履歴ファイル（`hands/*.json`）は、初めて起動したときに一度だけ DB に取り込む
-- サーバーを入れ直すとき、`better-sqlite3`（SQLite の部品）は `npm ci` でふつうは出来上がりのものが落ちてくる。もし組み立てが始まって失敗したら、`sudo apt install -y build-essential python3` してから `npm ci` をやり直す
+- サーバーを入れ直すとき、`better-sqlite3`（SQLite の部品）は `npm ci` でふつうは出来上がりのものが落ちてくる。落ちてこないときはその場で組み立てるので、手順 4 の `build-essential`・`python3` が要る
 
 ## ハンド履歴を取り出すとき
 
