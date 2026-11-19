@@ -26,11 +26,12 @@ const { openDb, backupDaily } = require("./db.js");
 const { openRecords } = require("./records.js");
 const { cleanSync } = require("./solo.js");
 const { createReview } = require("./review.js");
+const { openSpots, createSpotsApi } = require("./spots.js");
 
 const ROOT = path.join(__dirname, ".."),
   // 配信するファイル（これ以外は 404）
-  FILES = { "/": "index.html", "/index.html": "index.html", "/style.css": "style.css", "/account.html": "account.html", "/review.html": "review.html", "/hands.html": "hands.html" };
-for (const f of ["engine.js", "room.js", "net.js", "game.js", "mp.js", "solo-sync.js", "account.js", "page.js", "table.js", "review.js", "hands.js"]) FILES["/" + f] = f;
+  FILES = { "/": "index.html", "/index.html": "index.html", "/style.css": "style.css", "/account.html": "account.html", "/review.html": "review.html", "/hands.html": "hands.html", "/spots.html": "spots.html" };
+for (const f of ["engine.js", "room.js", "net.js", "game.js", "mp.js", "solo-sync.js", "account.js", "page.js", "table.js", "review.js", "hands.js", "spots.js"]) FILES["/" + f] = f;
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8" };
 const IDLE_MS = 10 * 60e3, // 誰もいない部屋を片付けるまでの時間
   PING_MS = 25e3, // 生きているかの確認の間隔（スマホのスリープなどで切れた接続を見つける）
@@ -50,7 +51,8 @@ function startServer(opt = {}) {
     // 記録の DB（DB_FILE で場所を変えられる。":memory:" はテスト用）
     dbFile = env.DB_FILE || path.join(dataDir, "alpoker.db"),
     db = openDb(dbFile),
-    records = openRecords(db);
+    records = openRecords(db),
+    spots = openSpots(db);
   // 記録の書き込みに失敗しても、ゲームは止めない
   const rec = (what, f) => {
     try {
@@ -159,6 +161,8 @@ function startServer(opt = {}) {
   };
   // 振り返り・傾向の口
   const review = createReview({ auth, accounts, records, json, log });
+  // スポット（同じ場面に、みんながどう打つか）の口
+  const spotsApi = createSpotsApi({ auth, accounts, spots, json, log });
   const server = http.createServer(async (req, res) => {
     let url;
     try {
@@ -179,6 +183,8 @@ function startServer(opt = {}) {
     }
     // 振り返り・打ち方の傾向（review.js）
     if (review(req, res, url)) return;
+    // スポット（spots.js）
+    if (spotsApi(req, res, url)) return;
     // ひとり用の記録（ログインしている人が、このサイトのページから送る。solo-sync.js）
     if (url.pathname === "/api/solo/sync" && req.method === "POST") {
       const u = auth.browserUser(req);

@@ -227,6 +227,9 @@ function mpAccount() {
         // トップ画面の「ハンドを見返す」（ログインしている人だけ）
         const h = $("hxb");
         if (h) h.hidden = false;
+        // 「スポット」も、ログインしている人だけ
+        const sp = $("spb");
+        if (sp) sp.hidden = false;
       }
       e.hidden = false;
       if (me.user) mpMember(me.user);

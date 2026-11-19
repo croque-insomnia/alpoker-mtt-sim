@@ -57,6 +57,28 @@ const MIGRATIONS = [
   ALTER TABLE tournaments ADD COLUMN client_key TEXT;
   CREATE UNIQUE INDEX tournaments_client ON tournaments(owner_uid, client_key) WHERE client_key IS NOT NULL;
   `,
+  // 3: スポット（同じ場面に、みんながどう打つか。server/spots.js）
+  `
+  CREATE TABLE spots (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,                -- "preflop" / "postflop"
+    source TEXT NOT NULL,              -- "auto"（自動で作った）/ "manual"（手で投稿した）
+    situation TEXT NOT NULL,           -- 場面（JSON。spots.js の makePreflop の形）
+    hash TEXT NOT NULL UNIQUE,         -- 同じ問題を2度作らないための目印
+    created_by TEXT,                   -- 投稿したアカウント（自動は NULL）
+    created_at INTEGER NOT NULL
+  );
+  CREATE TABLE spot_answers (
+    spot_id INTEGER NOT NULL REFERENCES spots(id) ON DELETE CASCADE,
+    uid TEXT NOT NULL,
+    action TEXT NOT NULL,              -- fold / call / raise / allin
+    size_bb REAL,                      -- raise のときの額（レイズ後の合計）
+    comment TEXT NOT NULL,
+    answered_at INTEGER NOT NULL,
+    PRIMARY KEY (spot_id, uid)         -- 1人1回。結果を見たあとは直せない
+  );
+  CREATE INDEX spot_answers_uid ON spot_answers(uid);
+  `,
 ];
 
 // file: DB のファイル（":memory:" でメモリだけ。テスト用）
