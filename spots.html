@@ -37,13 +37,27 @@
         <h2 style="margin-top: 0">スポット</h2>
         <p class="mu" style="margin-top: 0">同じ場面に、みんながどう打つか。答えると、それまでに答えた人の選択と理由が見られます。</p>
         <p id="msg" hidden></p>
-        <p><a href="./">ゲームに戻る</a>　<a href="spots.html">問題の一覧</a></p>
+        <p><a href="./">ゲームに戻る</a>　<a href="spots.html">問題の一覧</a>　<a href="spots.html?me=1">マイページ</a></p>
       </div>
       <!-- 一覧 -->
       <div id="lv" hidden>
         <div class="pn">
           <p><button id="nx1">次の問題に答える ▶</button>　<span class="mu" id="cnt"></span></p>
           <div class="wrap"><table class="rv" id="ls"></table></div>
+        </div>
+      </div>
+      <!-- マイページ（振り返り） -->
+      <div id="mv" hidden>
+        <div class="pn">
+          <h3 style="margin-top: 0">マイページ</h3>
+          <p class="mu" id="msum"></p>
+          <h4>答えの傾向（同じ問題で、ほかの人と比べて）</h4>
+          <div class="wrap"><table class="rv" id="mtend"></table></div>
+          <h4>お気に入り</h4>
+          <div class="wrap"><table class="rv" id="mfav"></table></div>
+          <h4>ほかの人と答えが違った問題</h4>
+          <p class="mu">ほかの人が2人以上答えていて、その 2/3 以上があなたと違う行動を選んだ問題です。違った割合が大きい順。</p>
+          <div class="wrap"><table class="rv" id="mmin"></table></div>
         </div>
       </div>
       <!-- 1問 -->
@@ -53,6 +67,7 @@
           <p class="mu" id="tinfo" hidden></p>
           <div id="flow"></div>
           <p id="q"></p>
+          <p><button class="g" id="fav">☆ お気に入りに入れる</button> <span class="mu">あとでマイページから振り返れます</span></p>
           <!-- 答える -->
           <div id="form" hidden>
             <div class="acts" id="btns"></div>

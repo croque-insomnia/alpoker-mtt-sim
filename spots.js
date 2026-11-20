@@ -65,7 +65,7 @@ async function showList() {
     tr.onclick = () => go(s.id);
     tr.appendChild(el("td", null, s.id));
     const td = el("td");
-    td.append(el("span", "tag", s.kind == "preflop" ? "プリフロップ" : "ポストフロップ"), " ", title(s.situation));
+    td.append(el("span", "tag", s.kind == "preflop" ? "プリフロップ" : "ポストフロップ"), " ", (s.fav ? "★ " : "") + title(s.situation));
     tr.appendChild(td);
     tr.appendChild(el("td", "c2", s.answers + "人"));
     tr.appendChild(el("td", "c2", s.score > 0 ? "+" + s.score : s.score < 0 ? "−" + -s.score : ""));
@@ -254,6 +254,73 @@ function drawVotes(v) {
   $("vup").onclick = () => send(1);
   $("vdn").onclick = () => send(-1);
 }
+// お気に入り（あとでマイページから振り返る）
+function drawFav(on) {
+  $("fav").textContent = on ? "★ お気に入り（外す）" : "☆ お気に入りに入れる";
+  $("fav").classList.toggle("on", !!on);
+  $("fav").onclick = async () => {
+    try {
+      const r = await post("api/spots/fav", { id: S.id, on: !on });
+      drawFav(r.fav);
+    } catch (e) {
+      note("err", e.message);
+    }
+  };
+}
+// ---- マイページ ----
+const GN = { fold: "降りる", passive: "受け身（チェック・コール）", aggr: "攻める（ベット・レイズ・オールイン）" };
+// 問題の一覧（表）。cols: 追加の列 [見出し, (行) => 文字]
+function spotTable(t, rows, cols, empty) {
+  t.textContent = "";
+  if (!rows.length) return t.appendChild(el("tr")).appendChild(el("td", "mu", empty));
+  const h = el("tr");
+  for (const x of ["#", "場面", ...cols.map((c) => c[0])]) h.appendChild(el("th", null, x));
+  t.appendChild(h);
+  for (const s of rows) {
+    const tr = el("tr", "pick");
+    tr.onclick = () => go(s.id);
+    tr.appendChild(el("td", null, s.id));
+    const td = el("td");
+    td.append(el("span", "tag", s.kind == "preflop" ? "プリフロップ" : "ポストフロップ"), " ", title(s.situation));
+    tr.appendChild(td);
+    for (const c of cols) tr.appendChild(el("td", "c2", c[1](s)));
+    t.appendChild(tr);
+  }
+}
+async function showMine() {
+  const r = await get("api/spots/mine");
+  $("msum").textContent =
+    `答えた問題 ${r.answered}問` + (r.agree.n ? `・多数派と同じだった割合 ${r.agree.rate}%（ほかの人が2人以上答えた ${r.agree.n}問のうち）` : "");
+  // 傾向：ベットを受けたとき / 受けていないとき、行動のまとめごとに「あなた / ほかの人」の割合
+  const t = $("mtend");
+  t.textContent = "";
+  const h = el("tr");
+  for (const x of ["場面", "行動", "あなた", "ほかの人", "差"]) h.appendChild(el("th", null, x));
+  t.appendChild(h);
+  let any = false;
+  for (const [k, label, groups] of [["facing", "ベットを受けたとき", ["fold", "passive", "aggr"]], ["open", "受けていないとき", ["passive", "aggr"]]]) {
+    const x = r.tendency[k];
+    if (!x.n) continue;
+    any = true;
+    groups.forEach((g, i) => {
+      const a = x.mine[g] || 0, b = x.others[g] || 0, d = a - b, tr = el("tr");
+      tr.append(el("td", null, i ? "" : `${label}（${x.n}問）`), el("td", null, GN[g]), el("td", "c2", a + "%"), el("td", "c2", b + "%"), el("td", "c2", (d > 0 ? "+" : d < 0 ? "−" : "") + Math.abs(d) + "pt"));
+      t.appendChild(tr);
+    });
+  }
+  if (!any) t.appendChild(el("tr")).appendChild(el("td", "mu", "ほかの人も答えた問題がまだありません"));
+  spotTable($("mfav"), r.favs, [["あなた", (s) => (s.mine ? ACT[s.mine] : "未回答")]], "まだありません（問題の画面の「☆ お気に入りに入れる」で入ります）");
+  spotTable(
+    $("mmin"),
+    r.minority,
+    [
+      ["あなた", (s) => ACT[s.mine]],
+      ["ほかの人", (s) => Object.entries(s.others).sort((a, b) => b[1] - a[1]).map(([a, n]) => `${ACT[a]} ${n}`).join("・")],
+    ],
+    "まだありません",
+  );
+  $("mv").hidden = false;
+}
 async function showSpot(id) {
   const r = await get("api/spots/one?id=" + id);
   S = { ...r.spot.situation, id: r.spot.id };
@@ -269,6 +336,7 @@ async function showSpot(id) {
       `）・${S.table_size || S.seats.length}人卓・平均の持ち点 ${S.avg_bb}BB・あなた ${S.hero.stack_bb}BB`;
   $("q").textContent = r.answered ? `#${S.id}　${title(S)}` : `#${S.id}　${title(S)}。どうする？（${r.count}人が回答済み）`;
   $("form").hidden = $("res").hidden = true;
+  drawFav(r.fav);
   if (r.answered) drawResult(S, r.answers), drawVotes(r.votes);
   else drawForm(S);
   $("sv").hidden = false;
@@ -276,8 +344,9 @@ async function showSpot(id) {
 
 (async () => {
   try {
-    const id = +new URLSearchParams(location.search).get("id");
+    const qs = new URLSearchParams(location.search), id = +qs.get("id");
     if (id) await showSpot(id);
+    else if (qs.has("me")) await showMine();
     else await showList();
   } catch (e) {
     note("err", e.status == 401 ? "ログインしてください（トップ画面の「ログイン」から）" : e.message);

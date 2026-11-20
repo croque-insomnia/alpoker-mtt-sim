@@ -89,6 +89,16 @@ const MIGRATIONS = [
     PRIMARY KEY (spot_id, uid)
   );
   `,
+  // 5: お気に入り（あとで振り返りたい問題。アカウントごと）
+  `
+  CREATE TABLE spot_favs (
+    spot_id INTEGER NOT NULL REFERENCES spots(id) ON DELETE CASCADE,
+    uid TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (spot_id, uid)
+  );
+  CREATE INDEX spot_favs_uid ON spot_favs(uid);
+  `,
 ];
 
 // file: DB のファイル（":memory:" でメモリだけ。テスト用）
