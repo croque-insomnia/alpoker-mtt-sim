@@ -3,7 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const { startServer } = require("../server/server.js");
 const { openAccounts } = require("../server/accounts.js");
-const { makePreflop, makePostflop, spotKey, cleanAnswer, isFacing, openSpots, HAND_POOL, ORDER } = require("../server/spots.js");
+const { makePreflop, makePostflop, spotKey, cleanAnswer, isFacing, openSpots, hasLimp, BAD, HAND_POOL, ORDER } = require("../server/spots.js");
 const { openDb } = require("../server/db.js");
 const E = require("../engine.js");
 
@@ -236,4 +236,110 @@ test("ベットを受けているかは、丸める前の額で決める（ご�
 test("engine の R は、withRandom の中では差し替えた乱数を返す", () => {
   const a = E.withRandom(E.seeded(5), () => [E.R(), E.R()]), b = E.withRandom(E.seeded(5), () => [E.R(), E.R()]);
   assert.deepEqual(a, b);
+});
+
+test("ポストフロップ：リンプのあった場面は出さない（SB と BB の2人きりで揃えるのは残す）。前に作った未回答のものは片付ける", () => {
+  const A = (pos, action) => ({ street: "preflop", pos, action });
+  const F = (p) => A(p, "fold");
+  assert.ok(hasLimp([A("UTG", "call"), F("CO"), F("BTN"), F("SB"), A("BB", "check")]), "UTG のリンプ");
+  assert.ok(hasLimp([F("UTG"), F("CO"), F("BTN"), A("SB", "call"), A("BB", "raise"), A("SB", "call")]) === false, "SB と BB の2人きり");
+  assert.ok(hasLimp([F("UTG"), A("CO", "call"), F("BTN"), A("SB", "call"), A("BB", "check")]), "CO のリンプのあとの SB");
+  assert.ok(!hasLimp([A("UTG", "raise"), A("CO", "call"), F("BTN"), F("SB"), A("BB", "call")]), "レイズのあとのコールはリンプではない");
+  // 作った問題には、リンプがない
+  for (let seed = 1, n = 0; n < 150; seed++) {
+    const x = makePostflop(seed);
+    if (!x) continue;
+    n++;
+    assert.ok(!hasLimp(x.actions), "seed " + seed);
+  }
+  // 片付け：未回答でリンプのあるものだけ消し、答えのついたものは残す
+  const db = openDb(":memory:");
+  openSpots(db);
+  const ins = db.prepare("INSERT INTO spots (kind, source, situation, hash, created_at) VALUES ('postflop', 'auto', ?, ?, 0)");
+  const limped = JSON.stringify({ actions: [A("UTG", "call"), F("CO"), F("BTN"), F("SB"), A("BB", "check")] });
+  const a = Number(ins.run(limped, "a").lastInsertRowid), b = Number(ins.run(limped, "b").lastInsertRowid);
+  const c = Number(ins.run(JSON.stringify({ actions: [A("UTG", "raise")] }), "c").lastInsertRowid);
+  db.prepare("INSERT INTO spot_answers (spot_id, uid, action, comment, answered_at) VALUES (?, 'u', 'check', 'x', 0)").run(b);
+  openSpots(db);
+  assert.deepEqual(db.prepare("SELECT id FROM spots ORDER BY id").all().map((r) => r.id), [b, c]);
+  assert.ok(a);
+});
+
+test("問題に大会の状況（残り人数・入賞・平均の持ち点）が入る。バブル付近は使わない", () => {
+  for (const x of [...Array.from({ length: 300 }, () => makePreflop()), ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20].map(makePostflop).filter(Boolean)]) {
+    assert.ok(x.players_left >= 12 && x.players_left <= 30, x.kind + " " + x.players_left);
+    assert.equal(x.entries, 40);
+    assert.equal(x.itm, 8);
+    assert.ok(x.avg_bb >= 5 && x.avg_bb <= 60, x.kind + " avg " + x.avg_bb);
+  }
+});
+
+test("ポストフロップ：自分のドンク（前のストリートの攻め手がまだ動いていないのに先に打つか）はごくまれにしか出さない", () => {
+  const donk = (x) => {
+    if (x.facing) return false;
+    const prev = { flop: "preflop", turn: "flop", river: "turn" }[x.street];
+    let agg = null;
+    for (const a of x.actions) if (a.street == prev && (a.action == "bet" || a.action == "raise")) agg = a.pos;
+    return !!agg && agg != x.hero.position && !x.actions.some((a) => a.street == x.street && a.pos == agg);
+  };
+  let n = 0, d = 0;
+  for (let seed = 1; n < 400; seed++) {
+    const x = makePostflop(seed);
+    if (!x) continue;
+    n++;
+    if (donk(x)) d++;
+  }
+  assert.ok(d / n < 0.05, `ドンク ${d}/${n}`);
+});
+
+test("次の問題：前に答えたのと違う種類を出す。評価の高い問題を先に、悪い問題は出さない。評価は答えてから", async (t) => {
+  // 作り置きを動かす（ポストフロップは1問作るのに 0.1 秒ほどかかり、「次の問題」の中では作り切れないことが多い。本番と同じく作り置きから出す）
+  const { member, call } = await boot(t, 20);
+  const k = member("Kaina"), c = member("Croque"), m = member("Mio");
+  for (let i = 0; i < 300; i++) {
+    const L = (await call(k, "api/spots")).body.spots;
+    if (["preflop", "postflop"].every((kd) => L.filter((s) => s.kind == kd).length >= 3)) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  const kindOf = async (who, id) => (await call(who, "api/spots/one?id=" + id)).body.spot.kind;
+  const answer = async (who, id) => {
+    const s = (await call(who, "api/spots/one?id=" + id)).body.spot.situation;
+    return call(who, "api/spots/answer", { body: { id, action: isFacing(s) ? "fold" : "check", comment: "x" } });
+  };
+  // 交互に出る
+  const kinds = [];
+  for (let i = 0; i < 4; i++) {
+    const id = (await call(k, "api/spots/next")).body.id;
+    kinds.push(await kindOf(k, id));
+    assert.equal((await answer(k, id)).status, 200);
+  }
+  for (let i = 1; i < kinds.length; i++) assert.notEqual(kinds[i], kinds[i - 1], kinds.join(","));
+  // 評価：答える前はできない。答えたあとは良い・悪いを付けられ、取り消せる
+  const ids = (await call(k, "api/spots")).body.spots.map((s) => s.id);
+  const [a1, a2] = ids;
+  assert.equal((await call(c, "api/spots/vote", { body: { id: a1, vote: 1 } })).status, 403);
+  await answer(c, a1);
+  const v = await call(c, "api/spots/vote", { body: { id: a1, vote: 1 } });
+  assert.deepEqual([v.status, v.body.votes.up, v.body.votes.mine], [200, 1, 1]);
+  assert.equal((await call(c, "api/spots/vote", { body: { id: a1, vote: 2 } })).status, 400);
+  assert.equal((await call(c, "api/spots/vote", { raw: "null" })).status, 400);
+  assert.equal((await call(c, "api/spots/one?id=" + a1)).body.votes.up, 1);
+  // 悪い問題が BAD 票分たまると、ほかの人の「次の問題」に出ない
+  await answer(k, a2);
+  await answer(c, a2);
+  await call(k, "api/spots/vote", { body: { id: a2, vote: -1 } });
+  await call(c, "api/spots/vote", { body: { id: a2, vote: -1 } });
+  assert.ok(BAD >= -2);
+  const seen = new Set();
+  for (let i = 0; i < 6; i++) {
+    const id = (await call(m, "api/spots/next")).body.id;
+    seen.add(id);
+    await answer(m, id);
+  }
+  assert.ok(!seen.has(a2), "悪い問題は出ない");
+  assert.ok(seen.has(a1), "良い問題は出る");
+  // 一覧に評価が出る
+  const L = (await call(m, "api/spots")).body.spots;
+  assert.equal(L.find((s) => s.id == a1).score, 1);
+  assert.equal(L.find((s) => s.id == a2).score, -2);
 });

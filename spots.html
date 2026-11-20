@@ -25,6 +25,7 @@
       .ans .who { font-weight: 700; }
       .ans .act { display: inline-block; margin-left: 6px; padding: 0 8px; border-radius: 10px; background: rgba(127, 127, 127, 0.18); font-size: 13px; }
       .ans p { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+      #vote button.on { outline: 2px solid var(--ac); }
       .sum { font-size: 14px; }
       .tag { display: inline-block; padding: 0 6px; border-radius: 8px; font-size: 12px; background: rgba(127, 127, 127, 0.18); }
       .tag.new { background: var(--ac); color: #000; }
@@ -49,6 +50,7 @@
       <div id="sv" hidden>
         <div id="tb"></div>
         <div class="pn">
+          <p class="mu" id="tinfo" hidden></p>
           <div id="flow"></div>
           <p id="q"></p>
           <!-- 答える -->
@@ -69,6 +71,11 @@
             <h3>みんなの回答</h3>
             <p class="sum" id="sum"></p>
             <div id="alist"></div>
+            <p id="vote">
+              この問題は：<button class="g" id="vup">良い問題</button><button class="g" id="vdn">悪い問題</button>
+              <span class="mu" id="vsum"></span>
+            </p>
+            <p class="mu">評価の高い問題ほど、ほかの人の「次の問題」に出やすくなります。悪い問題が多い問題は出なくなります。</p>
             <p><button id="nx2">次の問題に答える ▶</button></p>
           </div>
         </div>

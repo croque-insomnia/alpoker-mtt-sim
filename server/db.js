@@ -79,6 +79,16 @@ const MIGRATIONS = [
   );
   CREATE INDEX spot_answers_uid ON spot_answers(uid);
   `,
+  // 4: 問題の評価（良い問題 +1 / 悪い問題 -1。1人1票で、あとから変えられる）
+  `
+  CREATE TABLE spot_votes (
+    spot_id INTEGER NOT NULL REFERENCES spots(id) ON DELETE CASCADE,
+    uid TEXT NOT NULL,
+    vote INTEGER NOT NULL,             -- 1: 良い問題 / -1: 悪い問題
+    voted_at INTEGER NOT NULL,
+    PRIMARY KEY (spot_id, uid)
+  );
+  `,
 ];
 
 // file: DB のファイル（":memory:" でメモリだけ。テスト用）

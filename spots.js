@@ -57,7 +57,7 @@ async function showList() {
   t.textContent = "";
   if (list.length) {
     const h = el("tr");
-    for (const x of ["#", "場面", "回答", "あなた"]) h.appendChild(el("th", null, x));
+    for (const x of ["#", "場面", "回答", "評価", "あなた"]) h.appendChild(el("th", null, x));
     t.appendChild(h);
   }
   for (const s of list) {
@@ -68,6 +68,7 @@ async function showList() {
     td.append(el("span", "tag", s.kind == "preflop" ? "プリフロップ" : "ポストフロップ"), " ", title(s.situation));
     tr.appendChild(td);
     tr.appendChild(el("td", "c2", s.answers + "人"));
+    tr.appendChild(el("td", "c2", s.score > 0 ? "+" + s.score : s.score < 0 ? "−" + -s.score : ""));
     const m = el("td", "c2");
     if (s.mine) m.textContent = ACT[s.mine] || s.mine;
     else m.appendChild(el("span", "tag new", "未回答"));
@@ -236,15 +237,36 @@ function drawResult(s, answers) {
   if (answers.length < 2) L.appendChild(el("p", "mu", "まだほかの人の回答がありません。答えが集まったら、ここに並びます。"));
   $("res").hidden = false;
 }
+// 評価：良い問題 / 悪い問題（もう一度押すと取り消し）
+function drawVotes(v) {
+  v = v || { up: 0, down: 0, mine: null };
+  $("vup").classList.toggle("on", v.mine == 1);
+  $("vdn").classList.toggle("on", v.mine == -1);
+  $("vsum").textContent = `良い ${v.up}・悪い ${v.down}`;
+  const send = async (k) => {
+    try {
+      const r = await post("api/spots/vote", { id: S.id, vote: v.mine == k ? 0 : k });
+      drawVotes(r.votes);
+    } catch (e) {
+      note("err", e.message);
+    }
+  };
+  $("vup").onclick = () => send(1);
+  $("vdn").onclick = () => send(-1);
+}
 async function showSpot(id) {
   const r = await get("api/spots/one?id=" + id);
   S = { ...r.spot.situation, id: r.spot.id };
   document.title = `スポット #${S.id}`;
   drawTable(S);
   drawFlow(S);
+  // 大会の状況（残り人数・入賞・平均の持ち点）。前に作った問題には入っていない
+  $("tinfo").hidden = S.players_left == null;
+  if (S.players_left != null)
+    $("tinfo").textContent = `大会：残り ${S.players_left}人 / ${S.entries}人（入賞は ${S.itm}位まで）・平均の持ち点 ${S.avg_bb}BB・あなた ${S.hero.stack_bb}BB`;
   $("q").textContent = r.answered ? `#${S.id}　${title(S)}` : `#${S.id}　${title(S)}。どうする？（${r.count}人が回答済み）`;
   $("form").hidden = $("res").hidden = true;
-  if (r.answered) drawResult(S, r.answers);
+  if (r.answered) drawResult(S, r.answers), drawVotes(r.votes);
   else drawForm(S);
   $("sv").hidden = false;
 }
