@@ -94,7 +94,7 @@ function drawTable(s) {
     const me = x.pos == s.hero.position, bet = Math.min(put[x.pos], x.stack_bb - ante);
     return seatHtml({
       name: me ? "あなた" : tblEsc(x.pos),
-      lab: x.pos == "BTN" ? "D" : "", // SB・BB は名前がそのまま位置なので、印は重ねない
+      lab: x.pos == "BTN" || (s.seats.length == 2 && x.pos == "SB") ? "D" : "", // SB・BB は名前がそのまま位置なので、印は重ねない（ヘッズアップは SB がボタン）
       sub: me ? tblEsc(x.pos) : "",
       stack: fb(x.stack_bb - ante - bet),
       cards: me ? s.hero.hand.map((c) => cd(c)).join("") : cd(0, 1) + cd(0, 1),
@@ -115,7 +115,7 @@ function drawTablePost(s) {
     const me = x.pos == s.hero.position;
     return seatHtml({
       name: me ? "あなた" : tblEsc(x.pos),
-      lab: x.pos == "BTN" ? "D" : "",
+      lab: x.pos == "BTN" || (s.seats.length == 2 && x.pos == "SB") ? "D" : "",
       sub: me ? tblEsc(x.pos) : x.allin && !x.fold ? "オールイン" : "",
       stack: fb(x.now_bb),
       cards: me ? s.hero.hand.map((c) => cd(c)).join("") : cd(0, 1) + cd(0, 1),
@@ -263,7 +263,10 @@ async function showSpot(id) {
   // 大会の状況（残り人数・入賞・平均の持ち点）。前に作った問題には入っていない
   $("tinfo").hidden = S.players_left == null;
   if (S.players_left != null)
-    $("tinfo").textContent = `大会：残り ${S.players_left}人 / ${S.entries}人（入賞は ${S.itm}位まで）・平均の持ち点 ${S.avg_bb}BB・あなた ${S.hero.stack_bb}BB`;
+    $("tinfo").textContent =
+      `大会：残り ${S.players_left}人 / ${S.entries}人（入賞は ${S.itm}位まで` +
+      (S.players_left <= 2 ? "・ヘッズアップ" : S.players_left <= 5 ? "・最終卓" : S.players_left <= S.itm ? "・入賞圏内" : S.players_left <= S.itm + 3 ? "・バブル付近" : "") +
+      `）・${S.table_size || S.seats.length}人卓・平均の持ち点 ${S.avg_bb}BB・あなた ${S.hero.stack_bb}BB`;
   $("q").textContent = r.answered ? `#${S.id}　${title(S)}` : `#${S.id}　${title(S)}。どうする？（${r.count}人が回答済み）`;
   $("form").hidden = $("res").hidden = true;
   if (r.answered) drawResult(S, r.answers), drawVotes(r.votes);

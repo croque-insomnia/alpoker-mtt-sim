@@ -30,6 +30,7 @@ const HAND_POOL = (() => {
 // シナリオ：open（自分より前が全員降りた）/ vsopen（前の人のオープンに対応）/ vs3bet（自分のオープンに 3bet が返ってきた）
 // 成り立たない組み合わせは作らない：BB はオープンしない（全員降りたら BB の勝ちで終わる）。10BB の 3bet への対応は、ほぼオールインの判断なので出さない
 // BTN は、出題する側（自分）にはしない（設計書の方針。相手としては出る）
+// （5-Max のとき。卓の人数が減ったときは heroPosOf で決める）
 const HERO_POS = { open: ["UTG", "CO", "SB"], vsopen: ["CO", "SB", "BB"], vs3bet: ["UTG", "CO", "SB"] };
 const SCENARIOS = ["open", "vsopen", "vs3bet"];
 
@@ -49,48 +50,58 @@ function dealHand(cls, R) {
   return [cardOf(cls[0], s1), cardOf(cls[1], s2)];
 }
 const r1 = (x) => Math.round(x * 10) / 10;
-// 大会の状況：40人エントリー（開始 10000点）、入賞は上位 20%（8人）。残りは 12〜30人
-// （残り 9〜11人のバブル付近は CPU の動きが変わるので、問題の場面には使わない）
+// 大会の状況：40人エントリー（開始 10000点）、入賞は上位 20%（8人）。残りは 2〜30人
+// バブル付近（残り 9〜11人）・入賞圏内・最終卓（残り5人以下）も出す。そこでは CPU も入賞を意識した判断になる（engine.js の ai2）
+// 残り4人以下では、卓の人数もそれに合わせて減る（4人・3人・ヘッズアップ）
 const ENTRIES = 40, ITM = Math.floor(ENTRIES * 0.2);
-const leftOf = (R) => 12 + Math.floor(R() * 19);
+const leftOf = (R) => 2 + Math.floor(R() * 29);
+// n 人卓の席（アクション順）。ヘッズアップは SB がボタンで、プリフロップは SB から
+const orderOf = (n) => ORDER.slice(ORDER.length - Math.min(5, n));
+// 出題する自分の席：open は BB 以外（全員降りたら BB の勝ち）、vsopen は前に誰かいる席、vs3bet は後ろに誰かいる席。BTN は出さない（企画書の方針）
+function heroPosOf(scenario, ord) {
+  return ord.filter((pos, i) => pos != "BTN" && (scenario == "open" ? pos != "BB" : scenario == "vsopen" ? i > 0 : i < ord.length - 1));
+}
 const pick = (a, R) => a[Math.floor(R() * a.length)];
 
 // 1問作る。R: 0〜1 の乱数。戻り値は situation（spots.situation に入る形）
 // 席の stack_bb は配札前の持ち点（アンティ・ブラインドを払う前）。actions は自分の番までの流れ
 function makePreflop(R = Math.random, want = {}) {
+  // 残り人数を先に決める（4人以下なら卓の人数も減る）。席を指定されたときは 5-Max（残り5人以上）にする
+  const left = want.pos ? 5 + Math.floor(R() * 26) : leftOf(R),
+    ORD = orderOf(left);
   const scenario = want.scenario || pick(SCENARIOS, R);
-  const heroPos = want.pos || pick(HERO_POS[scenario], R);
+  const heroPos = want.pos || pick(heroPosOf(scenario, ORD), R);
   const stack = want.stack || pick(scenario == "vs3bet" ? STACKS.filter((s) => s > 10) : STACKS, R);
   const cls = want.hand || pick(HAND_POOL, R);
-  const hi = ORDER.indexOf(heroPos);
+  const hi = ORD.indexOf(heroPos);
   // 相手の持ち点：自分の 0.6〜1.6 倍（実戦らしくばらす）。0.1 刻み
-  const seats = ORDER.map((pos) => ({ pos, stack_bb: pos == heroPos ? stack : r1(Math.max(4, stack * (0.6 + R()))) }));
+  const seats = ORD.map((pos) => ({ pos, stack_bb: pos == heroPos ? stack : r1(Math.max(4, stack * (0.6 + R()))) }));
   const actions = [];
   const blind = (pos) => (pos == "SB" ? 0.5 : pos == "BB" ? 1 : 0);
   let opener = null, threebettor = null, openTo = 0, threeTo = 0;
   if (scenario == "open") {
-    for (let i = 0; i < hi; i++) actions.push({ pos: ORDER[i], action: "fold" });
+    for (let i = 0; i < hi; i++) actions.push({ pos: ORD[i], action: "fold" });
   } else if (scenario == "vsopen") {
     // 自分より前の誰かがオープン。その間と後ろの人は降りる
     const oi = Math.floor(R() * hi);
-    opener = ORDER[oi];
+    opener = ORD[oi];
     openTo = pick(opener == "SB" ? [2.5, 3] : [2, 2.2, 2.5], R);
     // オープンした人は、オールインにならない程度の持ち点にする（オープン額の 4 倍以上）
     if (seats[oi].stack_bb < openTo * 4) seats[oi].stack_bb = r1(openTo * (4 + 2 * R()));
-    for (let i = 0; i < hi; i++) actions.push(i == oi ? { pos: ORDER[i], action: "raise", to_bb: openTo } : { pos: ORDER[i], action: "fold" });
+    for (let i = 0; i < hi; i++) actions.push(i == oi ? { pos: ORD[i], action: "raise", to_bb: openTo } : { pos: ORD[i], action: "fold" });
   } else {
     // 自分がオープンし、後ろの誰かが 3bet。ほかは降りる
     openTo = heroPos == "SB" ? 3 : pick([2, 2.2], R);
-    const ti = hi + 1 + Math.floor(R() * (ORDER.length - hi - 1));
-    threebettor = ORDER[ti];
-    for (let i = 0; i < hi; i++) actions.push({ pos: ORDER[i], action: "fold" });
+    const ti = hi + 1 + Math.floor(R() * (ORD.length - hi - 1));
+    threebettor = ORD[ti];
+    for (let i = 0; i < hi; i++) actions.push({ pos: ORD[i], action: "fold" });
     actions.push({ pos: heroPos, action: "raise", to_bb: openTo });
     // 3bet の額：後ろから（インポジション）3倍、ブラインドから 3.5〜4倍。持ち点を超えるならオールイン
     threeTo = r1(openTo * (threebettor == "SB" || threebettor == "BB" ? (heroPos == "SB" ? 3 : 3.8) : 3));
     const ts = seats[ti];
     // 3bet する人は、オールインにならない程度の持ち点にする（3bet 額の 1.6 倍以上）
     if (ts.stack_bb < threeTo * 1.6) ts.stack_bb = r1(threeTo * (1.6 + R()));
-    for (let i = hi + 1; i < ORDER.length; i++) actions.push(i == ti ? { pos: ORDER[i], action: "raise", to_bb: threeTo } : { pos: ORDER[i], action: "fold" });
+    for (let i = hi + 1; i < ORD.length; i++) actions.push(i == ti ? { pos: ORD[i], action: "raise", to_bb: threeTo } : { pos: ORD[i], action: "fold" });
   }
   // 自分が今、場に出している額と、コールに要る額
   const heroIn = scenario == "vs3bet" ? openTo : blind(heroPos);
@@ -108,7 +119,7 @@ function makePreflop(R = Math.random, want = {}) {
   return {
     kind: "preflop",
     scenario,
-    table_size: 5,
+    table_size: ORD.length,
     ante_bb: ANTE,
     hero: { position: heroPos, stack_bb: stack, hand: dealHand(cls, R), cls },
     seats,
@@ -120,12 +131,14 @@ function makePreflop(R = Math.random, want = {}) {
     min_raise_bb: minRaise,
     max_bb: r1(heroStack), // オールインの額（この手に使える全部）
     pot_bb: pot,
-    ...preflopTour(R),
+    ...preflopTour(R, left, seats),
   };
 }
 // プリフロップの問題の大会の状況：残り人数を決め、そのときの平均の持ち点（BB）が 12〜40BB になるレベルを選ぶ
-function preflopTour(R) {
-  const left = leftOf(R), avgChips = (ENTRIES * 10000) / left;
+// 残り5人以下なら全員がこの卓にいるので、平均はこの卓の持ち点から出す
+function preflopTour(R, left, seats) {
+  if (left <= 5) return { players_left: left, entries: ENTRIES, itm: ITM, avg_bb: r1(seats.reduce((x, s) => x + s.stack_bb, 0) / seats.length) };
+  const avgChips = (ENTRIES * 10000) / left;
   const fits = E.LV.map(([, bb]) => avgChips / bb).filter((x) => x >= 12 && x <= 40);
   const avg = fits.length ? fits[Math.floor(R() * fits.length)] : avgChips / E.LV[E.LV.length - 1][1];
   return { players_left: left, entries: ENTRIES, itm: ITM, avg_bb: r1(avg) };
@@ -137,13 +150,13 @@ const STREET = { 0: "preflop", 3: "flop", 4: "turn", 5: "river" };
 // プリフロップでリンプ（だれもレイズしていないうちに、BB 以外がコールして入る）があったか
 // ゲームの CPU は、入るときに3〜4回に1回リンプするので、そのまま写すとリンプの場面が多すぎる（実戦ではまれ）。そういう場面は出さない
 // ただし、SB が BB と2人きり（前の全員が降りた）で揃えるのは、実戦でもよくあるので残す
-// actions: 問題の形（{ street, pos, action }）
-function hasLimp(actions) {
+// actions: 問題の形（{ street, pos, action }）、n: 卓の人数（SB より前の n−2 人が全員降りていれば、SB と BB の2人きり）
+function hasLimp(actions, n = 5) {
   let folded = 0;
   for (const a of actions || []) {
     if (a.street != "preflop") break;
     if (a.action == "raise" || a.action == "bet") return false; // ここから先はレイズのあと
-    if (a.action == "call" && a.pos != "BB" && !(a.pos == "SB" && folded == 3)) return true;
+    if (a.action == "call" && a.pos != "BB" && !(a.pos == "SB" && folded == n - 2)) return true;
     if (a.action == "fold") folded++;
   }
   return false;
@@ -158,14 +171,16 @@ function makePostflop(seed) {
     const u = R(),
       target = u < 0.45 ? 3 : u < 0.8 ? 4 : 5;
     const depth = (lo, hi) => Math.round((lo + R() * (hi - lo)) * bb);
+    // 残り人数（4人以下なら、卓の人数もそれに合わせる）
+    const left = leftOf(R),
+      seatsN = Math.min(5, left);
     const P = [];
     const bal = E.TY.find((t) => t.name == "バランス");
     P.push({ ...E.fromType(bal), id: 0, oid: "hero", name: "あなた", hero: 1, stack: depth(12, 40), alive: 1 });
-    for (let i = 1; i < 5; i++) P.push({ ...E.fromType(E.TYC[Math.floor(R() * E.TYC.length)]), id: i, oid: "c" + i, name: "c" + i, stack: depth(8, 50), alive: 1 });
+    for (let i = 1; i < seatsN; i++) P.push({ ...E.fromType(E.TYC[Math.floor(R() * E.TYC.length)]), id: i, oid: "c" + i, name: "c" + i, stack: depth(8, 50), alive: 1 });
     const T = { p: E.shf(P.slice()), btn: -1 };
-    // 大会の途中（40人エントリー・入賞は8人、残り 12〜30人）として CPU に判断させる（最終卓やバブルの特別な動きにしない）
+    // 大会の途中（40人エントリー・入賞は8人、残り 5〜30人）として CPU に判断させる（バブル付近・最終卓では、それらしい動きになる）
     // ほかの卓の人にも持ち点を持たせて、平均の持ち点を出す
-    const left = leftOf(R);
     const rest = Array.from({ length: left - P.length }, (_, i) => ({ id: 100 + i, alive: 1, stack: depth(8, 50) }));
     const g = { P: P.concat(rest), tables: [T], lv, entries: ENTRIES, hist: [] };
     const tour = { players_left: left, entries: ENTRIES, itm: ITM, avg_bb: r1(g.P.reduce((x, p) => x + p.stack, 0) / left / bb) };
@@ -183,9 +198,12 @@ function makePostflop(seed) {
         // 実戦ではまれ（チェックがふつう）なので、5% だけ残す（ポストフロップの問題のうち約1.5%になる）
         if (!(v.c.toCall > 0) && isDonk(v, T) && R() >= 0.05) return null;
         if (!(v.c.toCall > 0) && R() < 0.5) return null;
+        // 人数の少ない卓は、あなたがフロップ以降まで残りやすく、そのままだと多く出すぎる（ヘッズアップは5人卓の約7倍）。
+        // 残り人数どおりの割合になるよう間引く
+        if (seatsN == 2 ? R() >= 0.15 : seatsN == 3 ? R() >= 0.5 : false) return null;
         const s = snapPostflop(v, T, bb, seed);
         if (s) Object.assign(s, tour);
-        return s && !hasLimp(s.actions) ? s : null; // リンプのあった場面は、次のシードへ
+        return s && !hasLimp(s.actions, s.table_size) ? s : null; // リンプのあった場面は、次のシードへ
       }
       if (v.c.board.length > target) return null;
       r = h.next(E.ai2(v.p, v.c));
@@ -252,7 +270,7 @@ function snapPostflop(v, T, bb, seed) {
 function spotKey(s) {
   if (s.kind == "postflop") return crypto.createHash("sha256").update("postflop|" + s.seed).digest("hex").slice(0, 32);
   const who = (s.actions || []).filter((a) => a.action == "raise").map((a) => a.pos + a.to_bb).join(",");
-  const k = [s.kind, s.scenario, s.hero.position, s.hero.stack_bb, s.hero.cls, who].join("|");
+  const k = [s.kind, s.scenario, s.hero.position, s.hero.stack_bb, s.hero.cls, who].join("|") + (s.table_size && s.table_size != 5 ? "|" + s.table_size : "");
   return crypto.createHash("sha256").update(k).digest("hex").slice(0, 32);
 }
 
@@ -267,7 +285,10 @@ function openSpots(db, { now = () => Date.now() } = {}) {
       .prepare(`SELECT id, situation FROM spots s WHERE s.source = 'auto' AND s.kind = 'postflop' AND NOT EXISTS (SELECT 1 FROM spot_answers a WHERE a.spot_id = s.id)`)
       .all();
     db.transaction(() => {
-      for (const r of rows) if (hasLimp(JSON.parse(r.situation).actions)) del.run(r.id);
+      for (const r of rows) {
+        const s = JSON.parse(r.situation);
+        if (hasLimp(s.actions, s.table_size || 5)) del.run(r.id);
+      }
     })();
   }
   const st = {
@@ -310,11 +331,12 @@ function openSpots(db, { now = () => Date.now() } = {}) {
   // （足りない分は topUp が空いているときに作り置きする）。作れなかった種類は、もう一方で作り直す
   const clock = () => Date.now();
   function makeOne(R, kind, budgetMs) {
+    // 時間の制限はポストフロップだけ（プリフロップは一瞬で作れる）。budgetMs が 0 なら、ポストフロップは1回も作らない
     const until = clock() + budgetMs;
-    for (let i = 0; i < 60 && clock() <= until; i++) {
+    for (let i = 0; i < 60 && (kind == "preflop" || clock() < until); i++) {
       let s = null;
       if (kind == "preflop") s = makePreflop(R);
-      else while (!s && clock() <= until) s = makePostflop(Math.floor(R() * 2 ** 31));
+      else while (!s && clock() < until) s = makePostflop(Math.floor(R() * 2 ** 31));
       if (!s) continue;
       const r = st.add.run(s.kind, "auto", JSON.stringify(s), spotKey(s), null, now());
       if (r.changes) return Number(r.lastInsertRowid);
@@ -499,4 +521,4 @@ function createSpotsApi({ auth, accounts, spots, json, log }) {
   };
 }
 
-module.exports = { makePostflop, makePreflop, spotKey, openSpots, cleanAnswer, isFacing, hasLimp, isDonk, BAD, createSpotsApi, HAND_POOL, HERO_POS, STACKS, ORDER };
+module.exports = { makePostflop, makePreflop, orderOf, heroPosOf, spotKey, openSpots, cleanAnswer, isFacing, hasLimp, isDonk, BAD, createSpotsApi, HAND_POOL, HERO_POS, STACKS, ORDER };

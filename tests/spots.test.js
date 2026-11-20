@@ -27,8 +27,10 @@ test("問題：成り立たない場面を作らない（BB のオープン・BB
     const suited = Math.floor(a / 13) == Math.floor(b / 13);
     if (s.hero.cls.length == 3) assert.equal(suited, s.hero.cls[2] == "s", s.hero.cls);
     // 流れ：自分より前の人は全員出てくる。オープン・3bet の人は、オールインにならない持ち点
-    const hi = ORDER.indexOf(s.hero.position);
-    assert.deepEqual(s.actions.slice(0, hi).map((x) => x.pos), ORDER.slice(0, hi));
+    const ord = s.seats.map((x) => x.pos), hi = ord.indexOf(s.hero.position);
+    assert.equal(ord.length, s.table_size);
+    assert.deepEqual(ord, ORDER.slice(ORDER.length - ord.length), "席は 5-Max の後ろから");
+    assert.deepEqual(s.actions.slice(0, hi).map((x) => x.pos), ord.slice(0, hi));
     for (const x of s.actions.filter((x) => x.action == "raise" && x.pos != s.hero.position)) {
       const st = s.seats.find((y) => y.pos == x.pos).stack_bb;
       assert.ok(st > x.to_bb + s.ante_bb, `${x.pos} の持ち点 ${st} > ${x.to_bb}`);
@@ -245,12 +247,15 @@ test("ポストフロップ：リンプのあった場面は出さない（SB �
   assert.ok(hasLimp([F("UTG"), F("CO"), F("BTN"), A("SB", "call"), A("BB", "raise"), A("SB", "call")]) === false, "SB と BB の2人きり");
   assert.ok(hasLimp([F("UTG"), A("CO", "call"), F("BTN"), A("SB", "call"), A("BB", "check")]), "CO のリンプのあとの SB");
   assert.ok(!hasLimp([A("UTG", "raise"), A("CO", "call"), F("BTN"), F("SB"), A("BB", "call")]), "レイズのあとのコールはリンプではない");
+  assert.ok(!hasLimp([A("SB", "call"), A("BB", "check")], 2), "ヘッズアップの SB のリンプは2人きりなので残す");
+  assert.ok(!hasLimp([F("BTN"), A("SB", "call"), A("BB", "check")], 3), "3人卓で BTN が降りたあとの SB");
+  assert.ok(hasLimp([A("BTN", "call"), F("SB"), A("BB", "check")], 3), "3人卓の BTN のリンプ");
   // 作った問題には、リンプがない
   for (let seed = 1, n = 0; n < 150; seed++) {
     const x = makePostflop(seed);
     if (!x) continue;
     n++;
-    assert.ok(!hasLimp(x.actions), "seed " + seed);
+    assert.ok(!hasLimp(x.actions, x.table_size), "seed " + seed);
   }
   // 片付け：未回答でリンプのあるものだけ消し、答えのついたものは残す
   const db = openDb(":memory:");
@@ -265,13 +270,33 @@ test("ポストフロップ：リンプのあった場面は出さない（SB �
   assert.ok(a);
 });
 
-test("問題に大会の状況（残り人数・入賞・平均の持ち点）が入る。バブル付近は使わない", () => {
+test("問題に大会の状況（残り人数・入賞・平均の持ち点）が入る。バブル付近・最終卓も出る", () => {
+  const left = new Set();
   for (const x of [...Array.from({ length: 300 }, () => makePreflop()), ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20].map(makePostflop).filter(Boolean)]) {
-    assert.ok(x.players_left >= 12 && x.players_left <= 30, x.kind + " " + x.players_left);
+    assert.ok(x.players_left >= 2 && x.players_left <= 30, x.kind + " " + x.players_left);
+    assert.equal(x.table_size, Math.min(5, x.players_left), "残り4人以下なら卓の人数も減る");
+    // 残り5人以下は全員がこの卓にいるので、平均はこの卓の持ち点と合う
+    if (x.players_left <= 5) {
+      const mean = x.seats.reduce((t, q) => t + q.stack_bb, 0) / x.seats.length;
+      assert.ok(Math.abs(x.avg_bb - mean) < 0.2, `${x.kind} 残り${x.players_left}人 平均 ${x.avg_bb} / 卓 ${mean}`);
+    }
+    left.add(x.players_left);
     assert.equal(x.entries, 40);
     assert.equal(x.itm, 8);
     assert.ok(x.avg_bb >= 5 && x.avg_bb <= 60, x.kind + " avg " + x.avg_bb);
   }
+  for (const n of [2, 3, 4, 5, 8, 9, 11]) assert.ok(left.has(n), "残り " + n + " 人の問題も出る");
+  // 最終卓・少ない人数の卓のポストフロップも作れる（ヘッズアップも）
+  const sizes = new Set();
+  for (let seed = 1; sizes.size < 4 && seed < 6000; seed++) {
+    const x = makePostflop(seed);
+    if (x) {
+      sizes.add(x.table_size);
+      assert.equal(x.seats.length, x.table_size);
+      assert.equal(x.table_size, Math.min(5, x.players_left));
+    }
+  }
+  assert.deepEqual([...sizes].sort(), [2, 3, 4, 5], "2〜5人卓のどれも出る");
 });
 
 test("ポストフロップ：自分のドンク（前のストリートの攻め手がまだ動いていないのに先に打つか）はごくまれにしか出さない", () => {
@@ -342,4 +367,22 @@ test("次の問題：前に答えたのと違う種類を出す。評価の高�
   const L = (await call(m, "api/spots")).body.spots;
   assert.equal(L.find((s) => s.id == a1).score, 1);
   assert.equal(L.find((s) => s.id == a2).score, -2);
+});
+
+test("卓の人数が減ったプリフロップ：出せる席だけを出し、ヘッズアップは SB（ボタン）から", () => {
+  const { orderOf, heroPosOf } = require("../server/spots.js");
+  assert.deepEqual(orderOf(2), ["SB", "BB"]);
+  assert.deepEqual(orderOf(3), ["BTN", "SB", "BB"]);
+  assert.deepEqual(heroPosOf("open", orderOf(2)), ["SB"]);
+  assert.deepEqual(heroPosOf("vsopen", orderOf(2)), ["BB"]);
+  assert.deepEqual(heroPosOf("vs3bet", orderOf(2)), ["SB"]);
+  assert.deepEqual(heroPosOf("open", orderOf(5)), ["UTG", "CO", "SB"]);
+  const R = rng(11), seen = new Set();
+  for (let i = 0; i < 3000; i++) {
+    const s = makePreflop(R);
+    if (s.table_size < 5) seen.add(s.table_size + s.scenario + s.hero.position);
+    // 額のつじつま（ヘッズアップでも）
+    assert.ok(s.to_call_bb >= 0 && s.min_raise_bb > s.facing_bb && s.max_bb > 0, JSON.stringify(s));
+  }
+  for (const k of ["2openSB", "2vsopenBB", "2vs3betSB", "3openSB", "3vsopenBB", "4openCO", "4vs3betCO"]) assert.ok(seen.has(k), k);
 });
