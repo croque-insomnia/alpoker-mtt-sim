@@ -208,6 +208,15 @@ test("問題作り：重いポストフロップは時間で打ち切り、作�
   assert.equal(sp.topUp(3, 50), null, "足りていれば作らない");
 });
 
+test("作り置き：足りない種類のうち、少ないほうから作る（プリフロップばかりにならない）", () => {
+  const db = openDb(":memory:"), sp = openSpots(db);
+  const R = rng(5);
+  for (let i = 0; i < 2; i++) sp.create(R, "preflop"); // プリフロップ 2・ポストフロップ 0
+  let id = null;
+  for (let i = 0; i < 400 && !id; i++) id = sp.topUp(3, 50);
+  assert.equal(sp.get(id).kind, "postflop", "少ないポストフロップから");
+});
+
 test("一覧：未回答を先に並べてから上限で切る。全体の数も返す", () => {
   const db = openDb(":memory:"), sp = openSpots(db);
   const R = rng(3), ids = [];
@@ -350,11 +359,12 @@ test("次の問題：前に答えたのと違う種類を出す。評価の高�
   assert.equal((await call(c, "api/spots/vote", { raw: "null" })).status, 400);
   assert.equal((await call(c, "api/spots/one?id=" + a1)).body.votes.up, 1);
   // 悪い問題が BAD 票分たまると、ほかの人の「次の問題」に出ない
-  await answer(k, a2);
-  await answer(c, a2);
-  await call(k, "api/spots/vote", { body: { id: a2, vote: -1 } });
-  await call(c, "api/spots/vote", { body: { id: a2, vote: -1 } });
-  assert.ok(BAD >= -2);
+  // 悪い票を -BAD 票ぶん入れる（BAD を変えても、この確認がその基準どおりに働くように）
+  const voters = [k, c, ...Array.from({ length: Math.max(0, -BAD - 2) }, (_, i) => member("V" + i))];
+  for (const who of voters.slice(0, -BAD)) {
+    await answer(who, a2);
+    assert.equal((await call(who, "api/spots/vote", { body: { id: a2, vote: -1 } })).status, 200);
+  }
   const seen = new Set();
   for (let i = 0; i < 6; i++) {
     const id = (await call(m, "api/spots/next")).body.id;
@@ -366,7 +376,7 @@ test("次の問題：前に答えたのと違う種類を出す。評価の高�
   // 一覧に評価が出る
   const L = (await call(m, "api/spots")).body.spots;
   assert.equal(L.find((s) => s.id == a1).score, 1);
-  assert.equal(L.find((s) => s.id == a2).score, -2);
+  assert.equal(L.find((s) => s.id == a2).score, BAD);
 });
 
 test("卓の人数が減ったプリフロップ：出せる席だけを出し、ヘッズアップは SB（ボタン）から", () => {

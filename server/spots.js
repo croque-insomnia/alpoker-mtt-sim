@@ -179,7 +179,7 @@ function makePostflop(seed) {
     P.push({ ...E.fromType(bal), id: 0, oid: "hero", name: "あなた", hero: 1, stack: depth(12, 40), alive: 1 });
     for (let i = 1; i < seatsN; i++) P.push({ ...E.fromType(E.TYC[Math.floor(R() * E.TYC.length)]), id: i, oid: "c" + i, name: "c" + i, stack: depth(8, 50), alive: 1 });
     const T = { p: E.shf(P.slice()), btn: -1 };
-    // 大会の途中（40人エントリー・入賞は8人、残り 5〜30人）として CPU に判断させる（バブル付近・最終卓では、それらしい動きになる）
+    // 大会の途中（40人エントリー・入賞は8人、残り 2〜30人。4人以下は卓の人数も減る）として CPU に判断させる（バブル付近・最終卓では、それらしい動きになる）
     // ほかの卓の人にも持ち点を持たせて、平均の持ち点を出す
     const rest = Array.from({ length: left - P.length }, (_, i) => ({ id: 100 + i, alive: 1, stack: depth(8, 50) }));
     const g = { P: P.concat(rest), tables: [T], lv, entries: ENTRIES, hist: [] };
@@ -195,7 +195,7 @@ function makePostflop(seed) {
         // ベットを受けていない場面（チェックで回ってきた・先に打つ）は多く出がちなので、半分は捨てて次のシードへ
         // （この判断もシードの乱数で決めるので、同じシードなら同じ結果）
         // 自分のドンク（前のストリートで自分以外がベット・レイズし、その人がまだこのストリートで動いていないのに、先に打つかどうか）は、
-        // 実戦ではまれ（チェックがふつう）なので、5% だけ残す（ポストフロップの問題のうち約1.5%になる）
+        // 実戦ではまれ（チェックがふつう）なので、5% だけ残す（ポストフロップの問題のうち約2%になる。2000問で測定）
         if (!(v.c.toCall > 0) && isDonk(v, T) && R() >= 0.05) return null;
         if (!(v.c.toCall > 0) && R() < 0.5) return null;
         // 人数の少ない卓は、あなたがフロップ以降まで残りやすく、そのままだと多く出すぎる（ヘッズアップは5人卓の約7倍）。
@@ -279,6 +279,8 @@ const ACTIONS = ["fold", "check", "call", "bet", "raise", "allin"];
 const BAD = -2; // 評価（良い − 悪い）がこれ以下の問題は「次の問題」に出さない
 function openSpots(db, { now = () => Date.now() } = {}) {
   // 前に作った問題のうち、まだ誰も答えていない、リンプのあったポストフロップは片付ける（答えがついた問題は残す）
+  // 片付くのは、この判定を入れる前に作った問題だけ（新しく作る問題にリンプはない）。実際に消えるのは、更新後の最初の起動のとき
+  // （そのとき開いたままの問題に答えると「その問題はありません」になる。README の注意を参照）
   {
     const del = db.prepare("DELETE FROM spots WHERE id = ?");
     const rows = db
@@ -348,9 +350,12 @@ function openSpots(db, { now = () => Date.now() } = {}) {
   }
   // 作り置き：まだ誰も答えていないポストフロップの問題が keep 問より少なければ、budgetMs だけ使って作る（サーバーが定期的に呼ぶ）
   // プリフロップは軽いのですぐ作れるが、ポストフロップと交互に出すため、両方の種類を用意しておく
+  // 足りない種類のうち、作り置きの少ないほうから作る（プリフロップを先に固定すると、答える人が多いときにポストフロップが尽きたままになる）
   function topUp(keep = 3, budgetMs = 10, R = Math.random) {
-    for (const kind of ["preflop", "postflop"]) if (st.spare.get(kind).n < keep) return makeOne(R, kind, budgetMs);
-    return null;
+    const need = ["preflop", "postflop"].map((kind) => ({ kind, n: st.spare.get(kind).n })).filter((x) => x.n < keep);
+    if (!need.length) return null;
+    need.sort((a, b) => a.n - b.n);
+    return makeOne(R, need[0].kind, budgetMs);
   }
   return {
     create,
