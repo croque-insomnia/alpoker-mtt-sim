@@ -29,7 +29,7 @@ test("表の形：番号順に1回だけ当て、開き直しても同じ。知�
   const db = openDb(file);
   assert.equal(db.pragma("user_version", { simple: true }), MIGRATIONS.length);
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map((r) => r.name);
-  assert.deepEqual(tables, ["entries", "hand_players", "hands", "tournaments"]);
+  assert.deepEqual(tables, ["entries", "hand_players", "hands", "spot_answers", "spots", "tournaments"]);
   assert.equal(db.pragma("journal_mode", { simple: true }), "wal");
   assert.equal(fs.statSync(file).mode & 0o777, 0o600, "本人だけが読める");
   db.close();

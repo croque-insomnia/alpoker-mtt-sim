@@ -4,8 +4,9 @@
 // こうしておくと、ひとり用・ホストのブラウザ・サーバーのどこでも、同じコードで大会を進められる。
 (function (root) {
 "use strict";
-const R = Math.random,
-  SU = "♠♥♦♣",
+// 乱数。ふだんは Math.random。withRandom の中だけ、決まった並びの乱数（シードつき）に差し替える
+let R = Math.random;
+const SU = "♠♥♦♣",
   RK = "23456789TJQKA";
 const LV = [
   [100, 200, 50],
@@ -79,6 +80,27 @@ const shf = (a) => {
   }
   return a;
 };
+// fn を、乱数 rng（0〜1 を返す関数）で動かす。カードを配る・CPU が決める・個人差を付ける、のどれも rng を使う
+// 同じシードの rng なら、同じ配札・同じ CPU の動きになる（スポットの問題作りに使う）。fn は同期で動かすこと
+function withRandom(rng, fn) {
+  const prev = R;
+  R = rng;
+  try {
+    return fn();
+  } finally {
+    R = prev;
+  }
+}
+// シードから 0〜1 の乱数を作る（mulberry32）
+function seeded(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 // 大会 g の残り人数・入賞人数
 const alive = (g) => g.P.filter((p) => p.alive).length,
   itm = (g) => Math.floor(g.entries * 0.2);
@@ -768,7 +790,8 @@ function* hand(g, T, log) {
       const t0 = p.tot; // 履歴用：この行動で出した額を測る
       let act = "c",
         z = 0;
-      const a = p.hero ? yield { k: "hero", p, c } : ai2(p, c);
+      // 人間の番：H（ここまでのハンド履歴。記録しているときだけ）も渡す。スポットの問題作りで、その場面を写すのに使う
+      const a = p.hero ? yield { k: "hero", p, c, H } : ai2(p, c);
       if (cto)
         watch(p, (o) => {
           o.cto++;
@@ -1423,8 +1446,9 @@ function meStats(m) {
 }
 
 const api = {
-  R, SU, RK, LV, CPU0, TY, TYC, NM, NC, HN, REC_KEYS, BIGZ, MEMK, MEK, ME_DECAY, ME_PRIOR, ME_ROWS,
-  fromType, shf, alive, itm, cd, e5, best, hcls, pre, draw, tier, track, newObs, obs, ai2,
+  R: () => R(), // 今の乱数（withRandom の中では差し替えた乱数）
+  SU, RK, LV, CPU0, TY, TYC, NM, NC, HN, REC_KEYS, BIGZ, MEMK, MEK, ME_DECAY, ME_PRIOR, ME_ROWS,
+  withRandom, seeded, fromType, shf, alive, itm, cd, e5, best, hcls, pre, draw, tier, track, newObs, obs, ai2,
   hand, bust, bal, advanceLevel, autoAct, playHand, soloSetup, loadMem, saveMem, meBlend, meStats,
   histView, histText, cardText, fileStamp, analyze, analyzeRows, posName, replayFrames, handInfo, seatRing, ringSeats, potOf,
 };

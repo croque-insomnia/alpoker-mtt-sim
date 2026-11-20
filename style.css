@@ -4,6 +4,7 @@
   --tx: #1d2a24;
   --mu: #5d7266;
   --ac: #b8861b;
+  --ln: #1a5fb4;
   --bd: #c9d5cc;
   --ft: #2f6b50;
   --cd: #fff;
@@ -19,6 +20,7 @@
     --tx: #e8efe9;
     --mu: #8da598;
     --ac: #e0b44c;
+    --ln: #8ab4f8;
     --bd: #2a3d34;
     --ft: #1d4a37;
     --cd: #f4f4f0;
@@ -32,6 +34,7 @@
   --tx: #e8efe9;
   --mu: #8da598;
   --ac: #e0b44c;
+  --ln: #8ab4f8;
   --bd: #2a3d34;
   --ft: #1d4a37;
   --cd: #f4f4f0;
@@ -319,3 +322,6 @@ label.chk { display: block; margin: 8px 0; }
 }
 #tb.ring .bd { margin: 0; }
 .bd .pt { display: block; font-size: 11px; color: rgba(255, 255, 255, 0.6); }
+/* リンクの色（ダークモードでも読めるように） */
+a { color: var(--ln); }
+a:visited { color: var(--ln); }
