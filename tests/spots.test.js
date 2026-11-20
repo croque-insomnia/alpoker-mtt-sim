@@ -450,3 +450,30 @@ test("お気に入りとマイページ：お気に入りの一覧、他の人�
   assert.deepEqual((await call(k, "api/spots/mine")).body.favs, []);
   assert.equal((await call(null, "api/spots/mine")).status, 401);
 });
+
+test("お気に入りは良い問題1票と同じに数え、「次の問題」で先に出る", async (t) => {
+  const { member, call } = await boot(t);
+  const k = member("Kaina"), c = member("Croque"), m = member("Mio");
+  const pass = async (who, id) => {
+    const s = (await call(who, "api/spots/one?id=" + id)).body.spot.situation;
+    return call(who, "api/spots/answer", { body: { id, action: isFacing(s) ? "fold" : "check", comment: "x" } });
+  };
+  // Kaina が2問答え、新しいほう（あとに出る問題）だけをお気に入りにする
+  const a = (await call(k, "api/spots/next")).body.id;
+  await pass(k, a);
+  const b = (await call(k, "api/spots/next")).body.id;
+  await pass(k, b);
+  // Croque も2問とも答えて、答えの数をそろえる（並びは評価だけで決まるように）
+  await pass(c, a);
+  await pass(c, b);
+  const f = await call(k, "api/spots/fav", { body: { id: b, on: true } });
+  assert.deepEqual([f.body.fav, f.body.votes.favs], [1, 1], "答えたあとなら評価の数も返る");
+  const L = (await call(m, "api/spots")).body.spots;
+  assert.equal(L.find((s) => s.id == b).score, 1, "お気に入りが評価に入る");
+  assert.equal(L.find((s) => s.id == a).score, 0);
+  // 良い問題も付けると +2
+  await call(k, "api/spots/vote", { body: { id: b, vote: 1 } });
+  assert.equal((await call(m, "api/spots")).body.spots.find((s) => s.id == b).score, 2);
+  // Mio の「次の問題」は、古い a より、評価の高い b が先
+  assert.equal((await call(m, "api/spots/next")).body.id, b);
+});

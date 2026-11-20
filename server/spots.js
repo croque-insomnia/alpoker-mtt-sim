@@ -287,7 +287,10 @@ function spotKey(s) {
 
 // ---- 保存と読み出し ----
 const ACTIONS = ["fold", "check", "call", "bet", "raise", "allin"];
-const BAD = -2; // 評価（良い − 悪い）がこれ以下の問題は「次の問題」に出さない
+const BAD = -2; // 評価がこれ以下の問題は「次の問題」に出さない
+// 問題の評価（SQL）：良い問題 +1・悪い問題 −1 の合計に、お気に入りに入れた人の数を足す
+// （お気に入りは「あとで振り返りたい良い問題」なので、良い問題1票と同じに数える。良い問題とお気に入りの両方なら +2）
+const SCORE = `(COALESCE((SELECT SUM(v.vote) FROM spot_votes v WHERE v.spot_id = s.id), 0) + (SELECT COUNT(*) FROM spot_favs f2 WHERE f2.spot_id = s.id))`;
 function openSpots(db, { now = () => Date.now() } = {}) {
   // 前に作った問題のうち、まだ誰も答えていない、リンプのあったポストフロップは片付ける（答えがついた問題は残す）
   // 片付くのは、この判定を入れる前に作った問題だけ（新しく作る問題にリンプはない）。実際に消えるのは、更新後の最初の起動のとき
@@ -311,20 +314,20 @@ function openSpots(db, { now = () => Date.now() } = {}) {
     list: db.prepare(`SELECT s.id, s.kind, s.source, s.situation, s.created_at,
         (SELECT COUNT(*) FROM spot_answers a WHERE a.spot_id = s.id) AS answers,
         (SELECT a.action FROM spot_answers a WHERE a.spot_id = s.id AND a.uid = @uid) AS mine,
-        COALESCE((SELECT SUM(v.vote) FROM spot_votes v WHERE v.spot_id = s.id), 0) AS score,
+        ${SCORE} AS score,
         EXISTS (SELECT 1 FROM spot_favs f WHERE f.spot_id = s.id AND f.uid = @uid) AS fav
       FROM spots s ORDER BY (mine IS NULL) DESC, s.id DESC LIMIT @limit`),
     // 一覧の上限で切る前の数（画面の「回答済み x / y 問」用）
     totals: db.prepare(`SELECT (SELECT COUNT(*) FROM spots) AS total, (SELECT COUNT(*) FROM spot_answers WHERE uid = ?) AS done`),
     // 作り置き：まだ誰も答えていないポストフロップの問題の数
     spare: db.prepare(`SELECT COUNT(*) AS n FROM spots s WHERE s.kind = ? AND NOT EXISTS (SELECT 1 FROM spot_answers a WHERE a.spot_id = s.id)`),
-    // 次の問題：自分が答えていないもの（kind を渡せばその種類だけ）のうち、評価が高いもの → 答えた人が多いもの → 古いもの
-    // 評価が BAD 以下（悪い問題が良い問題より2票以上多い）の問題は出さない
+    // 次の問題：自分が答えていないもの（kind を渡せばその種類だけ）のうち、評価（お気に入りも含む）が高いもの → 答えた人が多いもの → 古いもの
+    // 評価（SCORE：良い − 悪い ＋ お気に入りの数）が BAD 以下の問題は出さない
     next: db.prepare(`SELECT s.id FROM spots s
       WHERE NOT EXISTS (SELECT 1 FROM spot_answers a WHERE a.spot_id = s.id AND a.uid = @uid)
         AND (@kind IS NULL OR s.kind = @kind)
-        AND COALESCE((SELECT SUM(v.vote) FROM spot_votes v WHERE v.spot_id = s.id), 0) > @bad
-      ORDER BY COALESCE((SELECT SUM(v.vote) FROM spot_votes v WHERE v.spot_id = s.id), 0) DESC,
+        AND ${SCORE} > @bad
+      ORDER BY ${SCORE} DESC,
         (SELECT COUNT(*) FROM spot_answers a WHERE a.spot_id = s.id) DESC, s.id ASC LIMIT 1`),
     // 最後に答えた問題の種類（次はもう一方を出して、プリフロップとポストフロップを交互にする）
     lastKind: db.prepare(`SELECT s.kind FROM spot_answers a JOIN spots s ON s.id = a.spot_id WHERE a.uid = ? ORDER BY a.answered_at DESC, a.rowid DESC LIMIT 1`),
@@ -343,7 +346,8 @@ function openSpots(db, { now = () => Date.now() } = {}) {
     answersAround: db.prepare(`SELECT a.spot_id, a.uid, a.action, s.kind, s.situation FROM spot_answers a JOIN spots s ON s.id = a.spot_id
       WHERE a.spot_id IN (SELECT spot_id FROM spot_answers WHERE uid = ?) ORDER BY a.spot_id`),
     votes: db.prepare(`SELECT COALESCE(SUM(vote > 0), 0) AS up, COALESCE(SUM(vote < 0), 0) AS down,
-      (SELECT vote FROM spot_votes WHERE spot_id = @id AND uid = @uid) AS mine FROM spot_votes WHERE spot_id = @id`),
+      (SELECT vote FROM spot_votes WHERE spot_id = @id AND uid = @uid) AS mine,
+      (SELECT COUNT(*) FROM spot_favs WHERE spot_id = @id) AS favs FROM spot_votes WHERE spot_id = @id`),
     answers: db.prepare("SELECT uid, action, size_bb, comment, answered_at FROM spot_answers WHERE spot_id = ? ORDER BY answered_at ASC"),
     mine: db.prepare("SELECT 1 FROM spot_answers WHERE spot_id = ? AND uid = ?"),
     count: db.prepare("SELECT COUNT(*) AS n FROM spot_answers WHERE spot_id = ?"),
@@ -558,7 +562,8 @@ function createSpotsApi({ auth, accounts, spots, json, log }) {
             const id = +m.id;
             if (!Number.isInteger(id) || !spots.get(id)) return json(res, 404, { why: "その問題はありません" });
             spots.setFav(id, me.id, m.on);
-            json(res, 200, { ok: 1, fav: spots.isFav(id, me.id) ? 1 : 0 });
+            // 答えたあとなら、評価の数（お気に入りも数える）も返す（画面の「良い・悪い・お気に入り」を出し直すため）
+            json(res, 200, { ok: 1, fav: spots.isFav(id, me.id) ? 1 : 0, ...(spots.answered(id, me.id) ? { votes: spots.votes(id, me.id) } : {}) });
           } catch (e) {
             log && log("spots error", e.stack || e.message);
             if (!res.headersSent) json(res, 500, { why: "保存できませんでした" });

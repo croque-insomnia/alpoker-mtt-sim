@@ -242,7 +242,7 @@ function drawVotes(v) {
   v = v || { up: 0, down: 0, mine: null };
   $("vup").classList.toggle("on", v.mine == 1);
   $("vdn").classList.toggle("on", v.mine == -1);
-  $("vsum").textContent = `良い ${v.up}・悪い ${v.down}`;
+  $("vsum").textContent = `良い ${v.up}・悪い ${v.down}` + (v.favs ? `・お気に入り ${v.favs}` : "");
   const send = async (k) => {
     try {
       const r = await post("api/spots/vote", { id: S.id, vote: v.mine == k ? 0 : k });
@@ -262,6 +262,7 @@ function drawFav(on) {
     try {
       const r = await post("api/spots/fav", { id: S.id, on: !on });
       drawFav(r.fav);
+      if (r.votes) drawVotes(r.votes); // 答えたあとなら、評価の数（お気に入りも数える）を出し直す
     } catch (e) {
       note("err", e.message);
     }
