@@ -5,6 +5,9 @@
 //   GET  api/spots            … 問題の一覧（自分が答えたか・答えた人数）
 //   GET  api/spots/next       … 次に答える問題の ID（なければ作る）
 //   GET  api/spots/one?id=    … 1問。答えていれば、全員の回答もつける
+//   GET  api/spots/mine       … マイページ（お気に入り・他の人と答えが違った問題・答えの傾向）
+//   POST api/spots/fav        … お気に入り { id, on: true|false }
+//   POST api/spots/vote       … 評価 { id, vote: 1|-1|0 }（答えてから）
 //   POST api/spots/answer     … 回答 { id, action: fold|call|raise|allin, size, comment }
 "use strict";
 const crypto = require("crypto");
@@ -52,9 +55,15 @@ function dealHand(cls, R) {
 const r1 = (x) => Math.round(x * 10) / 10;
 // 大会の状況：40人エントリー（開始 10000点）、入賞は上位 20%（8人）。残りは 2〜30人
 // バブル付近（残り 9〜11人）・入賞圏内・最終卓（残り5人以下）も出す。そこでは CPU も入賞を意識した判断になる（engine.js の ai2）
-// 残り4人以下では、卓の人数もそれに合わせて減る（4人・3人・ヘッズアップ）
+// 卓の人数は、ゲームと同じ決め方（残り人数を 5 で割って切り上げた数の卓に、人数差が1以内になるよう座る。engine.js の bal）
 const ENTRIES = 40, ITM = Math.floor(ENTRIES * 0.2);
 const leftOf = (R) => 2 + Math.floor(R() * 29);
+// 残り left 人のとき、あなたの卓の人数。卓は ceil(left / 5) 卓で、人数は floor か ceil（例：残り7人 → 4人卓と3人卓、6人 → 3人卓が2つ）
+// どちらの卓にいるかは、その卓の人数に比例して決める（あなたは残っている誰でもありうるので）
+function tableSizeOf(left, R) {
+  const t = Math.ceil(left / 5), base = Math.floor(left / t), big = left % t; // big 卓が base+1 人、残りが base 人
+  return big && R() < (big * (base + 1)) / left ? base + 1 : base;
+}
 // n 人卓の席（アクション順）。ヘッズアップは SB がボタンで、プリフロップは SB から
 const orderOf = (n) => ORDER.slice(ORDER.length - Math.min(5, n));
 // 出題する自分の席：open は BB 以外（全員降りたら BB の勝ち）、vsopen は前に誰かいる席、vs3bet は後ろに誰かいる席。BTN は出さない（企画書の方針）
@@ -66,9 +75,11 @@ const pick = (a, R) => a[Math.floor(R() * a.length)];
 // 1問作る。R: 0〜1 の乱数。戻り値は situation（spots.situation に入る形）
 // 席の stack_bb は配札前の持ち点（アンティ・ブラインドを払う前）。actions は自分の番までの流れ
 function makePreflop(R = Math.random, want = {}) {
-  // 残り人数を先に決める（4人以下なら卓の人数も減る）。席を指定されたときは 5-Max（残り5人以上）にする
-  const left = want.pos ? 5 + Math.floor(R() * 26) : leftOf(R),
-    ORD = orderOf(left);
+  // 残り人数を先に決め、卓の人数をゲームと同じ決め方で出す。席を指定されたときは 5人卓（残り 5・10・15…人など、5人卓がある人数）にする
+  let left = leftOf(R),
+    size = tableSizeOf(left, R);
+  if (want.pos) for (let i = 0; size != 5; i++) (left = 5 + 5 * Math.floor(R() * 6)), (size = tableSizeOf(left, R));
+  const ORD = orderOf(size);
   const scenario = want.scenario || pick(SCENARIOS, R);
   const heroPos = want.pos || pick(heroPosOf(scenario, ORD), R);
   const stack = want.stack || pick(scenario == "vs3bet" ? STACKS.filter((s) => s > 10) : STACKS, R);
@@ -171,9 +182,9 @@ function makePostflop(seed) {
     const u = R(),
       target = u < 0.45 ? 3 : u < 0.8 ? 4 : 5;
     const depth = (lo, hi) => Math.round((lo + R() * (hi - lo)) * bb);
-    // 残り人数（4人以下なら、卓の人数もそれに合わせる）
+    // 残り人数と、あなたの卓の人数（ゲームと同じ決め方）
     const left = leftOf(R),
-      seatsN = Math.min(5, left);
+      seatsN = tableSizeOf(left, R);
     const P = [];
     const bal = E.TY.find((t) => t.name == "バランス");
     P.push({ ...E.fromType(bal), id: 0, oid: "hero", name: "あなた", hero: 1, stack: depth(12, 40), alive: 1 });
@@ -276,7 +287,13 @@ function spotKey(s) {
 
 // ---- 保存と読み出し ----
 const ACTIONS = ["fold", "check", "call", "bet", "raise", "allin"];
-const BAD = -2; // 評価（良い − 悪い）がこれ以下の問題は「次の問題」に出さない
+const BAD = -2; // 評価がこれ以下の問題は「次の問題」に出さない
+// 問題の評価（SQL）：良い問題 +1・悪い問題 −1 の合計に、お気に入りに入れた人の数を足す
+// （お気に入りは「あとで振り返りたい良い問題」なので、良い問題1票と同じに数える。良い問題とお気に入りの両方なら +2）
+// 良い・悪いと同じく、数えるのはその問題に答えた人のお気に入りだけ（答える前の「あとで答える」用のお気に入りは数えない）
+const FAVS = (spot) =>
+  `(SELECT COUNT(*) FROM spot_favs f2 WHERE f2.spot_id = ${spot} AND EXISTS (SELECT 1 FROM spot_answers a2 WHERE a2.spot_id = f2.spot_id AND a2.uid = f2.uid))`;
+const SCORE = `(COALESCE((SELECT SUM(v.vote) FROM spot_votes v WHERE v.spot_id = s.id), 0) + ${FAVS("s.id")})`;
 function openSpots(db, { now = () => Date.now() } = {}) {
   // 前に作った問題のうち、まだ誰も答えていない、リンプのあったポストフロップは片付ける（答えがついた問題は残す）
   // 片付くのは、この判定を入れる前に作った問題だけ（新しく作る問題にリンプはない）。実際に消えるのは、更新後の最初の起動のとき
@@ -299,20 +316,21 @@ function openSpots(db, { now = () => Date.now() } = {}) {
     // 一覧：新しい順。自分が答えたか・答えた人数
     list: db.prepare(`SELECT s.id, s.kind, s.source, s.situation, s.created_at,
         (SELECT COUNT(*) FROM spot_answers a WHERE a.spot_id = s.id) AS answers,
-        (SELECT a.action FROM spot_answers a WHERE a.spot_id = s.id AND a.uid = ?) AS mine,
-        COALESCE((SELECT SUM(v.vote) FROM spot_votes v WHERE v.spot_id = s.id), 0) AS score
-      FROM spots s ORDER BY (mine IS NULL) DESC, s.id DESC LIMIT ?`),
+        (SELECT a.action FROM spot_answers a WHERE a.spot_id = s.id AND a.uid = @uid) AS mine,
+        ${SCORE} AS score,
+        EXISTS (SELECT 1 FROM spot_favs f WHERE f.spot_id = s.id AND f.uid = @uid) AS fav
+      FROM spots s ORDER BY (mine IS NULL) DESC, s.id DESC LIMIT @limit`),
     // 一覧の上限で切る前の数（画面の「回答済み x / y 問」用）
     totals: db.prepare(`SELECT (SELECT COUNT(*) FROM spots) AS total, (SELECT COUNT(*) FROM spot_answers WHERE uid = ?) AS done`),
     // 作り置き：まだ誰も答えていないポストフロップの問題の数
     spare: db.prepare(`SELECT COUNT(*) AS n FROM spots s WHERE s.kind = ? AND NOT EXISTS (SELECT 1 FROM spot_answers a WHERE a.spot_id = s.id)`),
-    // 次の問題：自分が答えていないもの（kind を渡せばその種類だけ）のうち、評価が高いもの → 答えた人が多いもの → 古いもの
-    // 評価が BAD 以下（悪い問題が良い問題より2票以上多い）の問題は出さない
+    // 次の問題：自分が答えていないもの（kind を渡せばその種類だけ）のうち、評価（お気に入りも含む）が高いもの → 答えた人が多いもの → 古いもの
+    // 評価（SCORE：良い − 悪い ＋ お気に入りの数）が BAD 以下の問題は出さない
     next: db.prepare(`SELECT s.id FROM spots s
       WHERE NOT EXISTS (SELECT 1 FROM spot_answers a WHERE a.spot_id = s.id AND a.uid = @uid)
         AND (@kind IS NULL OR s.kind = @kind)
-        AND COALESCE((SELECT SUM(v.vote) FROM spot_votes v WHERE v.spot_id = s.id), 0) > @bad
-      ORDER BY COALESCE((SELECT SUM(v.vote) FROM spot_votes v WHERE v.spot_id = s.id), 0) DESC,
+        AND ${SCORE} > @bad
+      ORDER BY ${SCORE} DESC,
         (SELECT COUNT(*) FROM spot_answers a WHERE a.spot_id = s.id) DESC, s.id ASC LIMIT 1`),
     // 最後に答えた問題の種類（次はもう一方を出して、プリフロップとポストフロップを交互にする）
     lastKind: db.prepare(`SELECT s.kind FROM spot_answers a JOIN spots s ON s.id = a.spot_id WHERE a.uid = ? ORDER BY a.answered_at DESC, a.rowid DESC LIMIT 1`),
@@ -320,8 +338,21 @@ function openSpots(db, { now = () => Date.now() } = {}) {
     vote: db.prepare(`INSERT INTO spot_votes (spot_id, uid, vote, voted_at) VALUES (?, ?, ?, ?)
       ON CONFLICT (spot_id, uid) DO UPDATE SET vote = excluded.vote, voted_at = excluded.voted_at`),
     unvote: db.prepare("DELETE FROM spot_votes WHERE spot_id = ? AND uid = ?"),
+    // お気に入り
+    fav: db.prepare("INSERT OR IGNORE INTO spot_favs (spot_id, uid, created_at) VALUES (?, ?, ?)"),
+    unfav: db.prepare("DELETE FROM spot_favs WHERE spot_id = ? AND uid = ?"),
+    isFav: db.prepare("SELECT 1 FROM spot_favs WHERE spot_id = ? AND uid = ?"),
+    favs: db.prepare(`SELECT s.id, s.kind, s.situation, f.created_at,
+        (SELECT a.action FROM spot_answers a WHERE a.spot_id = s.id AND a.uid = f.uid) AS mine
+      FROM spot_favs f JOIN spots s ON s.id = f.spot_id WHERE f.uid = ? ORDER BY f.created_at DESC`),
+    // マイページ用：自分が答えた問題の、全員の答え
+    // 答えは問題 ID と行動だけを読み、問題の中身は問題ごとに1回だけ読む（answeredSpots）
+    answersAround: db.prepare(`SELECT a.spot_id, a.uid, a.action FROM spot_answers a
+      WHERE a.spot_id IN (SELECT spot_id FROM spot_answers WHERE uid = ?) ORDER BY a.spot_id`),
+    answeredSpots: db.prepare(`SELECT s.id, s.kind, s.situation FROM spots s WHERE s.id IN (SELECT spot_id FROM spot_answers WHERE uid = ?)`),
     votes: db.prepare(`SELECT COALESCE(SUM(vote > 0), 0) AS up, COALESCE(SUM(vote < 0), 0) AS down,
-      (SELECT vote FROM spot_votes WHERE spot_id = @id AND uid = @uid) AS mine FROM spot_votes WHERE spot_id = @id`),
+      (SELECT vote FROM spot_votes WHERE spot_id = @id AND uid = @uid) AS mine,
+      ${FAVS("@id")} AS favs FROM spot_votes WHERE spot_id = @id`),
     answers: db.prepare("SELECT uid, action, size_bb, comment, answered_at FROM spot_answers WHERE spot_id = ? ORDER BY answered_at ASC"),
     mine: db.prepare("SELECT 1 FROM spot_answers WHERE spot_id = ? AND uid = ?"),
     count: db.prepare("SELECT COUNT(*) AS n FROM spot_answers WHERE spot_id = ?"),
@@ -360,7 +391,18 @@ function openSpots(db, { now = () => Date.now() } = {}) {
   return {
     create,
     topUp,
-    list: (uid, limit = 200) => st.list.all(uid, limit).map((r) => ({ ...r, situation: JSON.parse(r.situation), mine: r.mine || null })),
+    list: (uid, limit = 200) => st.list.all({ uid, limit }).map((r) => ({ ...r, situation: JSON.parse(r.situation), mine: r.mine || null })),
+    // お気に入りにする（on）・外す
+    setFav(id, uid, on) {
+      if (on) st.fav.run(id, uid, now());
+      else st.unfav.run(id, uid);
+    },
+    isFav: (id, uid) => !!st.isFav.get(id, uid),
+    // マイページ：お気に入り・他の人と答えが違った問題・答えの傾向
+    mine(uid) {
+      const favs = st.favs.all(uid).map((r) => ({ id: r.id, kind: r.kind, situation: JSON.parse(r.situation), mine: r.mine || null, at: r.created_at }));
+      return { favs, ...compare(uid, st.answersAround.all(uid), st.answeredSpots.all(uid)) };
+    },
     totals: (uid) => st.totals.get(uid),
     // 次の問題：前に答えた問題ともう一方の種類を優先する。なければどちらの種類でも（既にある問題を先に）、それもなければ作る
     // （まだ1問も答えていない人は、種類を問わず、評価が高い・答えが集まっている問題から）
@@ -392,6 +434,49 @@ function openSpots(db, { now = () => Date.now() } = {}) {
 
 // ベットを受けているか（facing の印がない古い問題は、to_call_bb で見る）
 const isFacing = (s) => (s.facing != null ? !!s.facing : s.to_call_bb > 0);
+// ---- マイページの集計 ----
+// 行動の大きなまとめ：降りる / 受け身（チェック・コール）/ 攻める（ベット・レイズ・オールイン）
+const GROUP = { fold: "fold", check: "passive", call: "passive", bet: "aggr", raise: "aggr", allin: "aggr" };
+const MINORITY = 2 / 3; // 他の人の 2/3 以上が、自分と違う行動を選んだ問題を「答えが違った問題」にする
+// rows: 自分が答えた問題の、全員の答え（{ spot_id, uid, action }）、spots: その問題（{ id, kind, situation }）
+// 戻り値：
+//   minority: 他の人と答えが違った問題（他の人が2人以上答えていて、その 2/3 以上が自分と違う行動）。違った割合が大きい順
+//   agree: 多数派（他の人で一番多い行動）と同じだった割合
+//   tendency: ベットを受けたとき / 受けていないときの、自分と他の人の行動の割合（同じ問題どうしで比べる）
+function compare(uid, rows, spots) {
+  const by = new Map(spots.map((s) => [s.id, { id: s.id, kind: s.kind, situation: JSON.parse(s.situation), mine: null, others: [] }]));
+  for (const r of rows) {
+    const x = by.get(r.spot_id);
+    if (!x) continue;
+    if (r.uid === uid) x.mine = r.action;
+    else x.others.push(r.action);
+  }
+  const minority = [];
+  let judged = 0, agreed = 0;
+  const tend = { facing: { n: 0, mine: {}, others: {} }, open: { n: 0, mine: {}, others: {} } };
+  for (const x of by.values()) {
+    if (!x.mine || !x.others.length) continue;
+    const count = {};
+    for (const a of x.others) count[a] = (count[a] || 0) + 1;
+    // 傾向：同じ問題で、自分の行動と、他の人の行動の割合を足していく
+    const t = tend[isFacing(x.situation) ? "facing" : "open"];
+    t.n++;
+    t.mine[GROUP[x.mine]] = (t.mine[GROUP[x.mine]] || 0) + 1;
+    for (const [a, k] of Object.entries(count)) t.others[GROUP[a]] = (t.others[GROUP[a]] || 0) + k / x.others.length;
+    if (x.others.length < 2) continue;
+    // 多数派と同じか（同じ数の行動が並んだら、そのどれかと同じなら同じ扱い）
+    judged++;
+    const top = Math.max(...Object.values(count));
+    if ((count[x.mine] || 0) == top) agreed++;
+    const diff = 1 - (count[x.mine] || 0) / x.others.length;
+    if (diff >= MINORITY) minority.push({ id: x.id, kind: x.kind, situation: x.situation, mine: x.mine, others: count, n: x.others.length, diff: r1(diff * 100) / 100 });
+  }
+  minority.sort((a, b) => b.diff - a.diff || b.n - a.n || b.id - a.id);
+  const rate = (o, n) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, n ? Math.round((v / n) * 100) : 0]));
+  const tendency = Object.fromEntries(Object.entries(tend).map(([k, t]) => [k, { n: t.n, mine: rate(t.mine, t.n), others: rate(t.others, t.n) }]));
+  const answered = [...by.values()].filter((x) => x.mine).length;
+  return { answered, agree: judged ? { n: judged, rate: Math.round((agreed / judged) * 100) } : { n: 0, rate: null }, minority: minority.slice(0, 30), tendency };
+}
 // 回答の中身を確かめる。戻り値 { ok } か { error }
 function cleanAnswer(m, s) {
   if (!m || typeof m != "object") return { error: "送信内容が読めません" };
@@ -459,6 +544,38 @@ function createSpotsApi({ auth, accounts, spots, json, log }) {
         });
         return true;
       }
+      if (p === "/api/spots/fav") {
+        if (req.method !== "POST") return json(res, 405, { why: "POST だけです" }), true;
+        const me = auth.browserUser(req);
+        if (!me) return json(res, 401, { why: "ログインしてください" }), true;
+        if (auth.limit("spotfav|" + me.id, 60)) return json(res, 429, { why: "少し待ってから送ってください" }), true;
+        let body = "";
+        req.on("data", (c) => {
+          body += c;
+          if (body.length > 1024) req.destroy();
+        });
+        // ここは外側の try の外（あとで呼ばれる）なので、自分で受け止める
+        req.on("end", () => {
+          try {
+            let m;
+            try {
+              m = JSON.parse(body);
+            } catch (e) {
+              return json(res, 400, { why: "送信内容が読めません" });
+            }
+            if (!m || typeof m != "object" || typeof m.on != "boolean") return json(res, 400, { why: "送信内容が読めません" });
+            const id = +m.id;
+            if (!Number.isInteger(id) || !spots.get(id)) return json(res, 404, { why: "その問題はありません" });
+            spots.setFav(id, me.id, m.on);
+            // 答えたあとなら、評価の数（お気に入りも数える）も返す（画面の「良い・悪い・お気に入り」を出し直すため）
+            json(res, 200, { ok: 1, fav: spots.isFav(id, me.id) ? 1 : 0, ...(spots.answered(id, me.id) ? { votes: spots.votes(id, me.id) } : {}) });
+          } catch (e) {
+            log && log("spots error", e.stack || e.message);
+            if (!res.headersSent) json(res, 500, { why: "保存できませんでした" });
+          }
+        });
+        return true;
+      }
       if (p === "/api/spots/vote") {
         if (req.method !== "POST") return json(res, 405, { why: "POST だけです" }), true;
         const me = auth.browserUser(req);
@@ -500,6 +617,8 @@ function createSpotsApi({ auth, accounts, spots, json, log }) {
         // 未回答を先に並べてから上限で切る。全体の数（total・done）も添える
         return json(res, 200, { me: { id: me.id, name: me.name }, spots: spots.list(me.id), ...spots.totals(me.id) }), true;
       }
+      // マイページ：お気に入り・他の人と答えが違った問題・答えの傾向（自分の分だけ。他の人の名前は出さない）
+      if (p === "/api/spots/mine") return json(res, 200, spots.mine(me.id)), true;
       if (p === "/api/spots/next") {
         // 新しく作ることがあるので、回数を制限する
         if (auth.limit("spotnext|" + me.id, 60)) return json(res, 429, { why: "少し待ってからやり直してください" }), true;
@@ -511,7 +630,7 @@ function createSpotsApi({ auth, accounts, spots, json, log }) {
         const id = +url.searchParams.get("id"), s = Number.isInteger(id) && spots.get(id);
         if (!s) return json(res, 404, { why: "その問題はありません" }), true;
         const done = spots.answered(id, me.id);
-        const body = { spot: s, answered: done ? 1 : 0, count: spots.count(id) };
+        const body = { spot: s, answered: done ? 1 : 0, count: spots.count(id), fav: spots.isFav(id, me.id) ? 1 : 0 };
         // 答えるまで、他の人の答えは見せない
         if (done) body.answers = spots.answers(id).map((a) => ({ ...a, name: nameOf(a.uid), me: a.uid === me.id ? 1 : 0, uid: undefined }));
         // 評価（良い・悪いの数と、自分の票）は、答えたあとに見せる
@@ -526,4 +645,4 @@ function createSpotsApi({ auth, accounts, spots, json, log }) {
   };
 }
 
-module.exports = { makePostflop, makePreflop, orderOf, heroPosOf, spotKey, openSpots, cleanAnswer, isFacing, hasLimp, isDonk, BAD, createSpotsApi, HAND_POOL, HERO_POS, STACKS, ORDER };
+module.exports = { makePostflop, makePreflop, orderOf, heroPosOf, tableSizeOf, spotKey, openSpots, cleanAnswer, isFacing, hasLimp, isDonk, BAD, createSpotsApi, HAND_POOL, HERO_POS, STACKS, ORDER };

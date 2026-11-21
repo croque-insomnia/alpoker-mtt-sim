@@ -283,7 +283,9 @@ test("問題に大会の状況（残り人数・入賞・平均の持ち点）�
   const left = new Set();
   for (const x of [...Array.from({ length: 300 }, () => makePreflop()), ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20].map(makePostflop).filter(Boolean)]) {
     assert.ok(x.players_left >= 2 && x.players_left <= 30, x.kind + " " + x.players_left);
-    assert.equal(x.table_size, Math.min(5, x.players_left), "残り4人以下なら卓の人数も減る");
+    // 卓の人数はゲームと同じ決め方（ceil(残り/5) 卓に、人数差1以内で座る）。残り7人で5人卓、などはない
+    const t = Math.ceil(x.players_left / 5);
+    assert.ok([Math.floor(x.players_left / t), Math.ceil(x.players_left / t)].includes(x.table_size), `残り${x.players_left}人で${x.table_size}人卓`);
     // 残り5人以下は全員がこの卓にいるので、平均はこの卓の持ち点と合う
     if (x.players_left <= 5) {
       const mean = x.seats.reduce((t, q) => t + q.stack_bb, 0) / x.seats.length;
@@ -302,7 +304,8 @@ test("問題に大会の状況（残り人数・入賞・平均の持ち点）�
     if (x) {
       sizes.add(x.table_size);
       assert.equal(x.seats.length, x.table_size);
-      assert.equal(x.table_size, Math.min(5, x.players_left));
+      const t = Math.ceil(x.players_left / 5);
+      assert.ok([Math.floor(x.players_left / t), Math.ceil(x.players_left / t)].includes(x.table_size));
     }
   }
   assert.deepEqual([...sizes].sort(), [2, 3, 4, 5], "2〜5人卓のどれも出る");
@@ -395,4 +398,99 @@ test("卓の人数が減ったプリフロップ：出せる席だけを出し�
     assert.ok(s.to_call_bb >= 0 && s.min_raise_bb > s.facing_bb && s.max_bb > 0, JSON.stringify(s));
   }
   for (const k of ["2openSB", "2vsopenBB", "2vs3betSB", "3openSB", "3vsopenBB", "4openCO", "4vs3betCO"]) assert.ok(seen.has(k), k);
+});
+
+test("卓の人数：ゲームと同じ決め方（残り7人 → 4人卓か3人卓、6人 → 3人卓）", () => {
+  const { tableSizeOf } = require("../server/spots.js");
+  const sizes = (L) => new Set(Array.from({ length: 500 }, () => tableSizeOf(L, Math.random)));
+  assert.deepEqual([...sizes(7)].sort(), [3, 4]);
+  assert.deepEqual([...sizes(6)], [3]);
+  assert.deepEqual([...sizes(9)].sort(), [4, 5]);
+  assert.deepEqual([...sizes(11)].sort(), [3, 4]);
+  assert.deepEqual([...sizes(30)], [5]);
+  for (let L = 2; L <= 5; L++) assert.deepEqual([...sizes(L)], [L]);
+  // 問題でも、残り7人で5人卓は出ない
+  for (let i = 0; i < 3000; i++) {
+    const s = makePreflop();
+    if (s.players_left == 7) assert.ok(s.table_size == 3 || s.table_size == 4);
+  }
+});
+
+test("お気に入りとマイページ：お気に入りの一覧、他の人と答えが違った問題、答えの傾向", async (t) => {
+  const { member, call } = await boot(t);
+  const k = member("Kaina"), c = member("Croque"), m = member("Mio");
+  const ids = [];
+  for (let i = 0; i < 3; i++) ids.push((await call(k, "api/spots/next")).body.id), await call(k, "api/spots/answer", { body: await ans(k, ids[i], "pass") });
+  async function ans(who, id, how) {
+    const s = (await call(who, "api/spots/one?id=" + id)).body.spot.situation;
+    const facing = isFacing(s);
+    return { id, action: how == "pass" ? (facing ? "fold" : "check") : "allin", comment: "x" };
+  }
+  // ほかの2人は、1問目で Kaina と違う行動（オールイン）、2問目で同じ行動
+  for (const who of [c, m]) {
+    await call(who, "api/spots/answer", { body: await ans(who, ids[0], "push") });
+    await call(who, "api/spots/answer", { body: await ans(who, ids[1], "pass") });
+  }
+  // お気に入り：付ける・外す。答える前でも付けられる。ほかの人のお気に入りは見えない
+  assert.equal((await call(k, "api/spots/fav", { body: { id: ids[2], on: true } })).body.fav, 1);
+  assert.equal((await call(k, "api/spots/one?id=" + ids[2])).body.fav, 1);
+  assert.equal((await call(c, "api/spots/one?id=" + ids[2])).body.fav, 0);
+  assert.equal((await call(k, "api/spots/fav", { body: { id: ids[2], on: "yes" } })).status, 400);
+  assert.equal((await call(k, "api/spots/fav", { raw: "null" })).status, 400);
+  assert.equal((await call(k, "api/spots")).body.spots.find((s) => s.id == ids[2]).fav, 1);
+  const me = (await call(k, "api/spots/mine")).body;
+  assert.deepEqual(me.favs.map((f) => f.id), [ids[2]]);
+  assert.equal(me.answered, 3);
+  // 1問目は2人とも違う行動 → 答えが違った問題。2問目は同じ → 出ない
+  assert.deepEqual(me.minority.map((x) => [x.id, x.diff, x.n]), [[ids[0], 1, 2]]);
+  assert.deepEqual(me.agree, { n: 2, rate: 50 });
+  // 傾向：同じ問題で、自分の行動とほかの人の行動の割合を比べる。
+  // 1問目は自分が降りる側（降りる・チェック）でほかの2人はオールイン、2問目は全員が自分と同じ
+  const want = { facing: { n: 0, mine: {}, others: {} }, open: { n: 0, mine: {}, others: {} } };
+  for (const [id, othersPush] of [[ids[0], true], [ids[1], false]]) {
+    const f = isFacing((await call(k, "api/spots/one?id=" + id)).body.spot.situation), w = want[f ? "facing" : "open"], mine = f ? "fold" : "passive";
+    w.n++;
+    w.mine[mine] = (w.mine[mine] || 0) + 1;
+    const o = othersPush ? "aggr" : mine;
+    w.others[o] = (w.others[o] || 0) + 1;
+  }
+  const pct = (w) => ({ n: w.n, mine: Object.fromEntries(Object.entries(w.mine).map(([g, v]) => [g, Math.round((v / w.n) * 100)])), others: Object.fromEntries(Object.entries(w.others).map(([g, v]) => [g, Math.round((v / w.n) * 100)])) });
+  assert.deepEqual(me.tendency, { facing: pct(want.facing), open: pct(want.open) });
+  // 外す
+  await call(k, "api/spots/fav", { body: { id: ids[2], on: false } });
+  assert.deepEqual((await call(k, "api/spots/mine")).body.favs, []);
+  assert.equal((await call(null, "api/spots/mine")).status, 401);
+});
+
+test("お気に入りは良い問題1票と同じに数え、「次の問題」で先に出る", async (t) => {
+  const { member, call } = await boot(t);
+  const k = member("Kaina"), c = member("Croque"), m = member("Mio");
+  const pass = async (who, id) => {
+    const s = (await call(who, "api/spots/one?id=" + id)).body.spot.situation;
+    return call(who, "api/spots/answer", { body: { id, action: isFacing(s) ? "fold" : "check", comment: "x" } });
+  };
+  // Kaina が2問答え、新しいほう（あとに出る問題）だけをお気に入りにする
+  const a = (await call(k, "api/spots/next")).body.id;
+  await pass(k, a);
+  const b = (await call(k, "api/spots/next")).body.id;
+  await pass(k, b);
+  // Croque も2問とも答えて、答えの数をそろえる（並びは評価だけで決まるように）
+  await pass(c, a);
+  await pass(c, b);
+  const f = await call(k, "api/spots/fav", { body: { id: b, on: true } });
+  assert.deepEqual([f.body.fav, f.body.votes.favs], [1, 1], "答えたあとなら評価の数も返る");
+  const L = (await call(m, "api/spots")).body.spots;
+  assert.equal(L.find((s) => s.id == b).score, 1, "お気に入りが評価に入る");
+  assert.equal(L.find((s) => s.id == a).score, 0);
+  // 良い問題も付けると +2
+  await call(k, "api/spots/vote", { body: { id: b, vote: 1 } });
+  assert.equal((await call(m, "api/spots")).body.spots.find((s) => s.id == b).score, 2);
+  // Mio の「次の問題」は、古い a より、評価の高い b が先
+  assert.equal((await call(m, "api/spots/next")).body.id, b);
+  // 答える前のお気に入りは数えない（「あとで答える」用）。答えたら数える
+  assert.equal((await call(m, "api/spots/fav", { body: { id: a, on: true } })).body.fav, 1);
+  assert.equal((await call(k, "api/spots")).body.spots.find((s) => s.id == a).score, 0, "答える前のお気に入り");
+  await pass(m, a);
+  assert.equal((await call(k, "api/spots")).body.spots.find((s) => s.id == a).score, 1, "答えたあとは数える");
+  assert.equal((await call(k, "api/spots/one?id=" + a)).body.votes.favs, 1);
 });
