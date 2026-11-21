@@ -222,7 +222,7 @@ function makePostflop(seed) {
         // リンプのあった場面は、LIMP_KEEP だけ残し、ほかは次のシードへ（この判断もシードの乱数）
         if (s && hasLimp(s.actions, s.table_size) && R() >= LIMP_KEEP) return null;
         // ここまでの流れにドンク（CPU があなたや攻め手より先に打った）があった場面も、DONK_KEEP だけ残す
-        // （あなた自身がドンクできる場面は、上の isDonk で 5% に間引いている）
+        // （あなた自身がドンクできる場面は、上の isDonk で MY_DONK_KEEP に間引いている）
         if (s && hasDonk(s, true) && R() >= DONK_KEEP) return null;
         return s;
       }
@@ -383,15 +383,22 @@ function hasDonk(s, onlyPast = false) {
   }
   return false;
 }
+// 片方の種類にしか付かない分類（シナリオはプリフロップだけ、ストリート・ポット・人数・立場・まれな場面はポストフロップだけ）
+const ONLY_PRE = new Set(["scen"]), ONLY_POST = new Set(["street", "pot", "ways", "role", "minor"]);
 // 出題の好み：avoid（避ける）は1つでも当てはまれば出さない。prefer（優先）は分類ごとに「どれか」、分類どうしは「どれも」
 // 例：prefer = [turn, river, hu] → 「ターンかリバー」かつ「ヘッズアップ」
+// もう一方の種類にしか付かない分類は、その問題では見ない（「3bet への対応」と「ヘッズアップ」→ プリフロップなら 3bet への対応、ポストフロップならヘッズアップ）
+// ただし、見る分類が1つも残らない問題は合わないことにする（「ヘッズアップ」だけを優先 → プリフロップは合わない）
 function tagMatch(tags, pref) {
   if (!pref) return { ok: true, prefer: true };
   const has = new Set(tags);
   if ((pref.avoid || []).some((x) => has.has(x))) return { ok: false, prefer: false };
+  const skip = has.has("pre") ? ONLY_POST : has.has("post") ? ONLY_PRE : new Set();
   const by = {};
-  for (const x of pref.prefer || []) (by[TAG_CAT[x]] ||= []).push(x);
-  return { ok: true, prefer: Object.values(by).every((xs) => xs.some((x) => has.has(x))) };
+  for (const x of pref.prefer || []) if (!skip.has(TAG_CAT[x])) (by[TAG_CAT[x]] ||= []).push(x);
+  const groups = Object.values(by);
+  if (!groups.length) return { ok: true, prefer: !(pref.prefer || []).length };
+  return { ok: true, prefer: groups.every((xs) => xs.some((x) => has.has(x))) };
 }
 // クエリの文字（"a,b,c"）から好みを作る。知らないタグは捨てる。何もなければ null
 function prefOf(prefer, avoid) {
@@ -442,7 +449,7 @@ function openSpots(db, { now = () => Date.now() } = {}) {
         AND (@kind IS NULL OR s.kind = @kind)
         AND ${SCORE} > @bad
       ORDER BY ${SCORE} DESC,
-        (SELECT COUNT(*) FROM spot_answers a WHERE a.spot_id = s.id) DESC, s.id ASC LIMIT 2000`),
+        (SELECT COUNT(*) FROM spot_answers a WHERE a.spot_id = s.id) DESC, s.id ASC`),
     next: db.prepare(`SELECT s.id FROM spots s
       WHERE NOT EXISTS (SELECT 1 FROM spot_answers a WHERE a.spot_id = s.id AND a.uid = @uid)
         AND (@kind IS NULL OR s.kind = @kind)
@@ -480,18 +487,19 @@ function openSpots(db, { now = () => Date.now() } = {}) {
   // ポストフロップは1ハンド丸ごと CPU に打たせるので重い。部屋の進行を止めないよう、使ってよい時間（budgetMs）で打ち切る
   // （足りない分は topUp が空いているときに作り置きする）。作れなかった種類は、もう一方で作り直す
   const clock = () => Date.now();
-  // want(s)：作った問題を使うか（出題の好みに合うか）。合わなかった問題も、ほかの人の問題として保存しておく
-  function makeOne(R, kind, budgetMs, want) {
+  const MAKE_MS = 60; // 好みに合う問題を作るのに使ってよい時間（1回の「次の問題」で、全部合わせて）
+  // want(s)：作った問題を使うか（出題の好みに合うか）。合わなかった問題は保存しない（好みによっては、合わない問題ばかり大量にできるので）
+  // until：打ち切る時刻（好みで探すときは、何回呼んでも合わせてこの時刻まで）。want があるときは、プリフロップも時間で打ち切る
+  function makeOne(R, kind, budgetMs, want, until = clock() + budgetMs) {
     // 時間の制限はポストフロップだけ（プリフロップは一瞬で作れる）。budgetMs が 0 なら、ポストフロップは1回も作らない
-    const until = clock() + budgetMs;
     const tries = want ? 400 : 60;
-    for (let i = 0; i < tries && (kind == "preflop" || clock() < until); i++) {
+    for (let i = 0; i < tries && ((kind == "preflop" && !want) || clock() < until); i++) {
       let s = null;
       if (kind == "preflop") s = makePreflop(R);
       else while (!s && clock() < until) s = makePostflop(Math.floor(R() * 2 ** 31));
-      if (!s) continue;
+      if (!s || (want && !want(s))) continue;
       const r = st.add.run(s.kind, "auto", JSON.stringify(s), spotKey(s), null, now());
-      if (r.changes && (!want || want(s))) return Number(r.lastInsertRowid);
+      if (r.changes) return Number(r.lastInsertRowid);
     }
     return null;
   }
@@ -550,7 +558,8 @@ function openSpots(db, { now = () => Date.now() } = {}) {
         return m.ok && (!strict || m.prefer);
       };
       const pick = (kind, strict) => {
-        for (const r of st.cands.all({ uid, kind, bad: BAD })) if (fit(JSON.parse(r.situation), strict)) return r.id;
+        // 件数で切らずに、上から1件ずつ読んで、合うものが見つかったところでやめる
+        for (const r of st.cands.iterate({ uid, kind, bad: BAD })) if (fit(JSON.parse(r.situation), strict)) return r.id;
         return null;
       };
       const order = kinds.length == 1 ? [kinds[0] == "pre" ? "preflop" : "postflop"] : want ? [want, null] : [null];
@@ -558,16 +567,25 @@ function openSpots(db, { now = () => Date.now() } = {}) {
         const id = pick(k, true);
         if (id) return id;
       }
-      // 合う問題がない：作ってみる（ポストフロップは重いので、少し長めに時間を使う）
+      // 合う問題がない：作ってみる。部屋の進行を止めないよう、作るのは全部合わせて MAKE_MS まで（足りなければ普通の問題を出す）
+      const until = clock() + MAKE_MS;
+      const other = (k) => (k == "preflop" ? "postflop" : "preflop");
       const kindOf = order[0] || (R() < 0.5 ? "preflop" : "postflop");
-      const made = makeOne(R, kindOf, 150, (s) => fit(s, true)) || (kinds.length == 1 ? null : makeOne(R, kindOf == "preflop" ? "postflop" : "preflop", 150, (s) => fit(s, true)));
+      // 優先に合いうる種類だけ作る（例：「オープンへの対応」だけを優先 → ポストフロップは合わないので作らない）
+      const can = (k) => {
+        if (kinds.length == 1 && k != order[0]) return false;
+        const skip = k == "preflop" ? ONLY_POST : ONLY_PRE;
+        return pref.prefer.some((x) => !skip.has(TAG_CAT[x])) || !pref.prefer.length;
+      };
+      let made = null;
+      for (const k of [kindOf, other(kindOf)]) if (!made && can(k)) made = makeOne(R, k, 0, (s) => fit(s, true), until);
       if (made) return made;
       // 優先は諦める（避けるは守る）
       for (const k of order) {
         const id = pick(k, false);
         if (id) return id;
       }
-      return makeOne(R, kindOf, 150, (s) => fit(s, false)) || makeOne(R, kindOf == "preflop" ? "postflop" : "preflop", 150, (s) => fit(s, false));
+      return makeOne(R, kindOf, 0, (s) => fit(s, false), until) || makeOne(R, other(kindOf), 0, (s) => fit(s, false), until);
     },
     // 評価する：vote = 1（良い問題）/ -1（悪い問題）/ 0（取り消す）
     vote(id, uid, vote) {
@@ -781,8 +799,9 @@ function createSpotsApi({ auth, accounts, spots, json, log }) {
         // 新しく作ることがあるので、回数を制限する
         if (auth.limit("spotnext|" + me.id, 60)) return json(res, 429, { why: "少し待ってからやり直してください" }), true;
         // 出題の好み：?prefer=タグ,…&avoid=タグ,…（spots.html がブラウザに覚えておいて送る）
-        const id = spots.next(me.id, undefined, prefOf(url.searchParams.get("prefer"), url.searchParams.get("avoid")));
-        if (!id) return json(res, 404, { why: "条件に合う問題を作れませんでした。「避ける」を減らしてみてください" }), true;
+        const pref = prefOf(url.searchParams.get("prefer"), url.searchParams.get("avoid"));
+        const id = spots.next(me.id, undefined, pref);
+        if (!id) return pref ? (json(res, 404, { why: "条件に合う問題を作れませんでした。「避ける」を減らしてみてください" }), true) : (json(res, 500, { why: "問題を作れませんでした" }), true);
         return json(res, 200, { id }), true;
       }
       if (p === "/api/spots/one") {

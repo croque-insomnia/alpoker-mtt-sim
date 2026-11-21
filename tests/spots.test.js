@@ -580,3 +580,17 @@ test("一覧の細い棒：行動ごとの人数は、自分が答えた問題�
   assert.deepEqual(L.find((r) => r.id == a).dist, { call: 2, fold: 1 });
   assert.equal(L.find((r) => r.id == b).dist, undefined, "答えていない問題には出さない");
 });
+
+test("出題の好み：片方の種類にしか付かない分類は、もう一方では見ない。合わない問題は作っても保存しない", () => {
+  const both = prefOf("vs3bet,hu", "");
+  assert.equal(tagMatch(["pre", "vs3bet", "mid"], both).prefer, true, "プリフロップはシナリオだけ見る");
+  assert.equal(tagMatch(["post", "flop", "hu"], both).prefer, true, "ポストフロップは人数だけ見る");
+  assert.equal(tagMatch(["pre", "open", "mid"], prefOf("hu", "")).prefer, false, "見る分類が残らなければ合わない");
+  // どの問題も合わない好み（深さを全部避ける）：何も保存せず、時間で打ち切る
+  const db = openDb(":memory:");
+  const sp = openSpots(db);
+  const t0 = Date.now();
+  assert.equal(sp.next("u", rng(5), prefOf("vsopen", "short,mid,deep")), null);
+  assert.ok(Date.now() - t0 < 1000, "時間で打ち切る " + (Date.now() - t0) + "ms");
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM spots").get().n, 0, "合わない問題は保存しない");
+});
