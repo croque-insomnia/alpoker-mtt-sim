@@ -40,6 +40,21 @@
       button.tg.a::before { content: "避ける "; font-size: 11px; text-decoration: none; display: inline-block; }
       .tl { display: block; margin-top: 2px; }
       .tl .tag { margin: 1px 3px 1px 0; font-size: 11px; }
+      /* 行動の色：GTO Wizard に寄せる（フォールド 青・チェック/コール 緑・ベット/レイズ 赤・オールイン 紫がかった濃い赤）
+         ライトとダークで別の段（色覚の型を問わず見分けられるかを検証した値） */
+      :root { --a-fold: #4687d8; --a-pass: #68c36d; --a-aggr: #c44132; --a-allin: #7d2a79; --a-pass-ink: #0d2b13; }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) { --a-fold: #4c8edf; --a-pass: #47a34e; --a-aggr: #ac281b; --a-allin: #8d3a88; --a-pass-ink: #fff; }
+      }
+      :root[data-theme="dark"] { --a-fold: #4c8edf; --a-pass: #47a34e; --a-aggr: #ac281b; --a-allin: #8d3a88; --a-pass-ink: #fff; }
+      .abar { display: flex; gap: 2px; height: 30px; margin: 8px 0 6px; }
+      .abar > div { display: flex; align-items: center; justify-content: center; min-width: 4px; color: #fff; font-size: 12px; font-weight: 700; white-space: nowrap; overflow: hidden; }
+      .abar > div:first-child { border-radius: 4px 0 0 4px; }
+      .abar > div:last-child { border-radius: 0 4px 4px 0; }
+      .abar > div:only-child { border-radius: 4px; }
+      .alegend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; margin-bottom: 8px; }
+      .alegend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+      .ans .act i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; }
       .tag.new { background: var(--ac); color: #000; }
     </style>
   </head>
@@ -105,6 +120,9 @@
           <div id="res" hidden>
             <h3>みんなの回答</h3>
             <p class="sum" id="sum"></p>
+            <!-- 行動の割合（あなたを含む、答えた全員）。色は GTO Wizard に寄せる -->
+            <div id="abar" class="abar" role="img"></div>
+            <div id="alegend" class="alegend"></div>
             <div id="alist"></div>
             <p id="vote">
               この問題は：<button class="g" id="vup">良い問題</button><button class="g" id="vdn">悪い問題</button>

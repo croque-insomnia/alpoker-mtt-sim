@@ -288,16 +288,49 @@ $("send").onclick = async () => {
     else check();
   }
 };
-function drawResult(s, answers) {
-  // 何人がどれを選んだか（グラフは出さない。5人規模では、並べて読むほうが分かる）
+// 行動の色（GTO Wizard に寄せる）：フォールド 青・チェック/コール 緑・ベット/レイズ 赤・オールイン 紫がかった濃い赤
+// チェックとコール、ベットとレイズは同じ場面に一緒に出ない（ベットを受けているかで決まる）ので、同じ色にする
+const ACOL = { fold: "var(--a-fold)", check: "var(--a-pass)", call: "var(--a-pass)", bet: "var(--a-aggr)", raise: "var(--a-aggr)", allin: "var(--a-allin)" };
+const AORDER = ["fold", "check", "call", "bet", "raise", "allin"]; // 受け身 → 攻め の順に並べる
+// 行動の割合の棒（あなたを含む、答えた全員）。1本の100%の棒に、行動ごとの区切りを並べ、区切りの中に人数を書く
+function drawBar(answers) {
   const n = {};
   for (const a of answers) n[a.action] = (n[a.action] || 0) + 1;
-  $("sum").textContent = `${answers.length}人が回答：` + Object.keys(ACT).filter((k) => n[k]).map((k) => `${ACT[k]} ${n[k]}`).join("・");
+  const total = answers.length, bar = $("abar"), lg = $("alegend");
+  bar.textContent = "";
+  lg.textContent = "";
+  const parts = AORDER.filter((k) => n[k]).map((k) => ({ k, n: n[k], pct: Math.round((100 * n[k]) / total) }));
+  for (const x of parts) {
+    const seg = el("div");
+    seg.style.flex = String(x.n);
+    seg.style.background = ACOL[x.k];
+    // 明るい緑の上は白い字が読みにくいので、ライトモードでは濃い字にする（ダークでは白）
+    if (x.k == "check" || x.k == "call") seg.style.color = "var(--a-pass-ink)";
+    seg.title = `${ACT[x.k]} ${x.n}人（${x.pct}%）`;
+    // 区切りが狭いときは数だけ（名前は凡例にある）
+    seg.textContent = x.n / total >= 0.3 ? `${ACT[x.k]} ${x.n}` : String(x.n);
+    bar.appendChild(seg);
+    const li = el("span");
+    const sw = el("i");
+    sw.style.background = ACOL[x.k];
+    li.append(sw, `${ACT[x.k]} ${x.n}人・${x.pct}%`);
+    lg.appendChild(li);
+  }
+  bar.setAttribute("aria-label", "行動の割合：" + parts.map((x) => `${ACT[x.k]} ${x.n}人（${x.pct}%）`).join("、"));
+}
+function drawResult(s, answers) {
+  // 何人がどれを選んだか：割合の棒と凡例。その下に、全員の選択と理由を並べる
+  $("sum").textContent = `${answers.length}人が回答（あなたを含む）`;
+  drawBar(answers);
   const L = $("alist");
   L.textContent = "";
   for (const a of answers) {
     const d = el("div", "ans" + (a.me ? " me" : ""));
-    d.append(el("span", "who", a.me ? `${a.name}（あなた）` : a.name), el("span", "act", actText(s, a)), el("p", null, a.comment));
+    const act = el("span", "act");
+    const sw = el("i");
+    sw.style.background = ACOL[a.action] || "transparent";
+    act.append(sw, actText(s, a));
+    d.append(el("span", "who", a.me ? `${a.name}（あなた）` : a.name), act, el("p", null, a.comment));
     L.appendChild(d);
   }
   if (answers.length < 2) L.appendChild(el("p", "mu", "まだほかの人の回答がありません。答えが集まったら、ここに並びます。"));
