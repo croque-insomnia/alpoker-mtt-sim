@@ -3,7 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const { startServer } = require("../server/server.js");
 const { openAccounts } = require("../server/accounts.js");
-const { makePreflop, makePostflop, spotKey, cleanAnswer, isFacing, openSpots, hasLimp, BAD, HAND_POOL, ORDER } = require("../server/spots.js");
+const { makePreflop, makePostflop, spotKey, cleanAnswer, isFacing, openSpots, hasLimp, BAD, HAND_POOL, ORDER, TAGS, tagsOf, tagMatch, prefOf, hasDonk } = require("../server/spots.js");
 const { openDb } = require("../server/db.js");
 const E = require("../engine.js");
 
@@ -249,7 +249,7 @@ test("engine の R は、withRandom の中では差し替えた乱数を返す",
   assert.deepEqual(a, b);
 });
 
-test("ポストフロップ：リンプのあった場面は出さない（SB と BB の2人きりで揃えるのは残す）。前に作った未回答のものは片付ける", () => {
+test("ポストフロップ：リンプの判定（SB と BB の2人きりで揃えるのはリンプにしない）。リンプの場面はまれに出て、前に作った問題も消さない", () => {
   const A = (pos, action) => ({ street: "preflop", pos, action });
   const F = (p) => A(p, "fold");
   assert.ok(hasLimp([A("UTG", "call"), F("CO"), F("BTN"), F("SB"), A("BB", "check")]), "UTG のリンプ");
@@ -259,14 +259,17 @@ test("ポストフロップ：リンプのあった場面は出さない（SB �
   assert.ok(!hasLimp([A("SB", "call"), A("BB", "check")], 2), "ヘッズアップの SB のリンプは2人きりなので残す");
   assert.ok(!hasLimp([F("BTN"), A("SB", "call"), A("BB", "check")], 3), "3人卓で BTN が降りたあとの SB");
   assert.ok(hasLimp([A("BTN", "call"), F("SB"), A("BB", "check")], 3), "3人卓の BTN のリンプ");
-  // 作った問題には、リンプがない
+  // 作った問題のリンプ・ドンクは、まれ（合わせて 3% くらい。ここでは 150 問で 10% 未満を見る。正確な割合は 8万シードで測った）
+  let minor = 0;
   for (let seed = 1, n = 0; n < 150; seed++) {
     const x = makePostflop(seed);
     if (!x) continue;
     n++;
-    assert.ok(!hasLimp(x.actions, x.table_size), "seed " + seed);
+    const t = tagsOf(x);
+    if (t.includes("limp") || t.includes("donk")) minor++;
   }
-  // 片付け：未回答でリンプのあるものだけ消し、答えのついたものは残す
+  assert.ok(minor < 15, "リンプ・ドンクの場面 " + minor + " / 150");
+  // 前に作った問題は、リンプがあっても消さない（答えがついていてもいなくても）
   const db = openDb(":memory:");
   openSpots(db);
   const ins = db.prepare("INSERT INTO spots (kind, source, situation, hash, created_at) VALUES ('postflop', 'auto', ?, ?, 0)");
@@ -275,8 +278,7 @@ test("ポストフロップ：リンプのあった場面は出さない（SB �
   const c = Number(ins.run(JSON.stringify({ actions: [A("UTG", "raise")] }), "c").lastInsertRowid);
   db.prepare("INSERT INTO spot_answers (spot_id, uid, action, comment, answered_at) VALUES (?, 'u', 'check', 'x', 0)").run(b);
   openSpots(db);
-  assert.deepEqual(db.prepare("SELECT id FROM spots ORDER BY id").all().map((r) => r.id), [b, c]);
-  assert.ok(a);
+  assert.deepEqual(db.prepare("SELECT id FROM spots ORDER BY id").all().map((r) => r.id), [a, b, c]);
 });
 
 test("問題に大会の状況（残り人数・入賞・平均の持ち点）が入る。バブル付近・最終卓も出る", () => {
@@ -493,4 +495,102 @@ test("お気に入りは良い問題1票と同じに数え、「次の問題」�
   await pass(m, a);
   assert.equal((await call(k, "api/spots")).body.spots.find((s) => s.id == a).score, 1, "答えたあとは数える");
   assert.equal((await call(k, "api/spots/one?id=" + a)).body.votes.favs, 1);
+});
+
+// ---- タグと出題の好み ----
+test("タグ：場面から決まる（種類・ストリート・ポット・人数・立場・深さ・大会・リンプ・ドンク）", () => {
+  const ids = new Set(TAGS.map((t) => t.id));
+  // プリフロップ
+  const p = makePreflop(rng(3), { scenario: "vsopen", pos: "BB", stack: 13, hand: "KJo" });
+  const tp = tagsOf(p);
+  assert.ok(tp.includes("pre") && tp.includes("vsopen") && tp.includes("short"), tp.join());
+  assert.ok(tp.every((x) => ids.has(x)));
+  // ポストフロップ：作った問題のタグは、どれも一覧にあり、分類ごとの必ずつくものがつく
+  let n = 0;
+  for (let seed = 1; n < 60; seed++) {
+    const s = makePostflop(seed);
+    if (!s) continue;
+    n++;
+    const t = tagsOf(s);
+    assert.ok(t.every((x) => ids.has(x)), t.join());
+    assert.ok(t.includes("post") && t.includes(s.street));
+    assert.equal(t.filter((x) => ["limped", "srp", "3bp"].includes(x)).length, 1);
+    assert.equal(t.filter((x) => ["hu", "multi"].includes(x)).length, 1);
+    assert.equal(t.filter((x) => ["facing", "checked", "first"].includes(x)).length, 1);
+    assert.equal(t.includes("facing"), isFacing(s));
+  }
+  // ドンクの判定（手で作った流れ）
+  const A = (street, pos, action, allin) => ({ street, pos, action, allin: allin ? 1 : 0 });
+  const base = { kind: "postflop", street: "flop", hero: { position: "BB" }, seats: [{ pos: "CO" }, { pos: "BB" }], facing: 1 };
+  const pf = [A("preflop", "CO", "raise"), A("preflop", "BB", "call")];
+  assert.ok(!hasDonk({ ...base, actions: pf.concat([A("flop", "BB", "check"), A("flop", "CO", "bet")]) }), "攻め手のベットはドンクではない");
+  assert.ok(hasDonk({ ...base, hero: { position: "CO" }, actions: pf.concat([A("flop", "BB", "bet")]) }), "攻め手より先のベットはドンク");
+  assert.ok(!hasDonk({ ...base, hero: { position: "CO" }, actions: [A("preflop", "CO", "raise", 1), A("preflop", "BB", "call"), A("flop", "BB", "bet")] }), "攻め手がオールインなら数えない");
+  assert.ok(hasDonk({ ...base, facing: 0, actions: pf }), "あなたが攻め手より先に打つ番");
+  assert.ok(!hasDonk({ ...base, facing: 0, actions: pf }, true), "流れの中だけを見るときは、あなたの番は数えない");
+});
+
+test("出題の好み：避けるは1つでも当てはまれば出さない。優先は分類ごとに「どれか」、分類どうしは「どれも」", () => {
+  assert.deepEqual(prefOf("turn,river,hu,nope", ""), { prefer: ["turn", "river", "hu"], avoid: [] });
+  assert.equal(prefOf("", "x"), null);
+  const pref = prefOf("turn,river,hu", "limp,donk");
+  assert.deepEqual(tagMatch(["post", "turn", "hu"], pref), { ok: true, prefer: true });
+  assert.deepEqual(tagMatch(["post", "river", "multi"], pref), { ok: true, prefer: false });
+  assert.deepEqual(tagMatch(["post", "flop", "hu"], pref), { ok: true, prefer: false });
+  assert.deepEqual(tagMatch(["post", "turn", "hu", "donk"], pref), { ok: false, prefer: false });
+  assert.deepEqual(tagMatch(["pre"], null), { ok: true, prefer: true });
+});
+
+test("次の問題：避けるタグの問題は出さず、優先のタグに合う問題を先に出す。合う問題がなければ作り、作れなければ普通に出す", () => {
+  const db = openDb(":memory:");
+  const sp = openSpots(db);
+  const add = (s, h) => Number(db.prepare("INSERT INTO spots (kind, source, situation, hash, created_at) VALUES (?, 'auto', ?, ?, 0)").run(s.kind, JSON.stringify(s), h).lastInsertRowid);
+  const open = add(makePreflop(rng(1), { scenario: "open", pos: "CO", stack: 16, hand: "A5s" }), "a");
+  const vs3 = add(makePreflop(rng(2), { scenario: "vs3bet", pos: "CO", stack: 20, hand: "A9s" }), "b");
+  // 好みなし：古い順（評価・人数が同じなら）
+  assert.equal(sp.next("u", rng(9)), open);
+  // 優先：3bet への対応
+  assert.equal(sp.next("u", rng(9), prefOf("vs3bet", "")), vs3);
+  // 避ける：オープン → 3bet への対応
+  assert.equal(sp.next("u", rng(9), prefOf("", "open")), vs3);
+  // 優先：オープンへの対応（まだない）→ 作る（プリフロップは軽いので、すぐ合うものができる）
+  const made = sp.next("u", rng(9), prefOf("vsopen", ""));
+  assert.ok(made && ![open, vs3].includes(made));
+  assert.ok(tagsOf(sp.get(made).situation).includes("vsopen"));
+  // 合わない問題を作っても、ほかの人の問題として残る（作った数 ≧ 返した数）
+  assert.ok(db.prepare("SELECT COUNT(*) n FROM spots").get().n >= 3);
+  // 優先がありえない組み合わせ（プリフロップかつリバー）→ 諦めて普通に出す。避けるは守る
+  const any = sp.next("u", rng(9), prefOf("pre,river", "vs3bet"));
+  assert.ok(any && any != vs3);
+  assert.ok(!tagsOf(sp.get(any).situation).includes("vs3bet"));
+});
+
+test("一覧の細い棒：行動ごとの人数は、自分が答えた問題にだけつく（答える前の問題には出さない）", () => {
+  const db = openDb(":memory:");
+  const sp = openSpots(db);
+  const add = (s, h) => Number(db.prepare("INSERT INTO spots (kind, source, situation, hash, created_at) VALUES (?, 'auto', ?, ?, 0)").run(s.kind, JSON.stringify(s), h).lastInsertRowid);
+  const a = add(makePreflop(rng(1), { scenario: "vsopen", pos: "BB", stack: 16, hand: "KJo" }), "a");
+  const b = add(makePreflop(rng(2), { scenario: "open", pos: "CO", stack: 16, hand: "A5s" }), "b");
+  const ans = (id, uid, action) => sp.answer(id, uid, { action, size_bb: null, comment: "x" });
+  ans(a, "me", "call");
+  ans(a, "u2", "fold");
+  ans(a, "u3", "call");
+  ans(b, "u2", "fold");
+  const L = sp.list("me");
+  assert.deepEqual(L.find((r) => r.id == a).dist, { call: 2, fold: 1 });
+  assert.equal(L.find((r) => r.id == b).dist, undefined, "答えていない問題には出さない");
+});
+
+test("出題の好み：片方の種類にしか付かない分類は、もう一方では見ない。合わない問題は作っても保存しない", () => {
+  const both = prefOf("vs3bet,hu", "");
+  assert.equal(tagMatch(["pre", "vs3bet", "mid"], both).prefer, true, "プリフロップはシナリオだけ見る");
+  assert.equal(tagMatch(["post", "flop", "hu"], both).prefer, true, "ポストフロップは人数だけ見る");
+  assert.equal(tagMatch(["pre", "open", "mid"], prefOf("hu", "")).prefer, false, "見る分類が残らなければ合わない");
+  // どの問題も合わない好み（深さを全部避ける）：何も保存せず、時間で打ち切る
+  const db = openDb(":memory:");
+  const sp = openSpots(db);
+  const t0 = Date.now();
+  assert.equal(sp.next("u", rng(5), prefOf("vsopen", "short,mid,deep")), null);
+  assert.ok(Date.now() - t0 < 1000, "時間で打ち切る " + (Date.now() - t0) + "ms");
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM spots").get().n, 0, "合わない問題は保存しない");
 });

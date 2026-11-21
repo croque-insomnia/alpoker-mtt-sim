@@ -29,6 +29,37 @@
       #vote button.on { outline: 2px solid var(--ac); }
       .sum { font-size: 14px; }
       .tag { display: inline-block; padding: 0 6px; border-radius: 8px; font-size: 12px; background: rgba(127, 127, 127, 0.18); }
+      #pref { margin: 6px 0 10px; }
+      #pref summary { cursor: pointer; font-size: 14px; }
+      #pbox .cat { margin: 6px 0; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+      #pbox .cat > span { font-size: 12px; color: var(--mu); min-width: 5.5em; }
+      button.tg { padding: 2px 10px; min-height: 30px; font-size: 13px; border-radius: 15px; background: transparent; color: var(--tx); border: 1px solid var(--bd); }
+      button.tg.p { background: var(--ac); color: #000; border-color: var(--ac); }
+      button.tg.p::before { content: "優先 "; font-size: 11px; }
+      button.tg.a { border-color: var(--er); color: var(--er); text-decoration: line-through; }
+      button.tg.a::before { content: "避ける "; font-size: 11px; text-decoration: none; display: inline-block; }
+      .tl { display: block; margin-top: 2px; }
+      .tl .tag { margin: 1px 3px 1px 0; font-size: 11px; }
+      /* 行動の色：GTO Wizard に寄せる（フォールド 青・チェック/コール 緑・ベット/レイズ 赤・オールイン 紫がかった濃い赤）
+         ライトとダークで別の段（色覚の型を問わず見分けられるかを検証した値） */
+      :root { --a-fold: #4687d8; --a-pass: #68c36d; --a-aggr: #c44132; --a-allin: #7d2a79; --a-pass-ink: #0d2b13; }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) { --a-fold: #4c8edf; --a-pass: #47a34e; --a-aggr: #ac281b; --a-allin: #8d3a88; --a-pass-ink: #fff; }
+      }
+      :root[data-theme="dark"] { --a-fold: #4c8edf; --a-pass: #47a34e; --a-aggr: #ac281b; --a-allin: #8d3a88; --a-pass-ink: #fff; }
+      .abar { display: flex; gap: 2px; height: 30px; margin: 8px 0 6px; }
+      .abar > div { display: flex; align-items: center; justify-content: center; min-width: 4px; color: #fff; font-size: 12px; font-weight: 700; white-space: nowrap; overflow: hidden; }
+      .abar > div:first-child { border-radius: 4px 0 0 4px; }
+      .abar > div:last-child { border-radius: 0 4px 4px 0; }
+      .abar > div:only-child { border-radius: 4px; }
+      .mbar { display: flex; gap: 2px; height: 6px; margin-top: 4px; max-width: 260px; }
+      .mbar > span { min-width: 3px; }
+      .mbar > span:first-child { border-radius: 3px 0 0 3px; }
+      .mbar > span:last-child { border-radius: 0 3px 3px 0; }
+      .mbar > span:only-child { border-radius: 3px; }
+      .alegend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; margin-bottom: 8px; }
+      .alegend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+      .ans .act i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; }
       .tag.new { background: var(--ac); color: #000; }
     </style>
   </head>
@@ -44,6 +75,13 @@
       <div id="lv" hidden>
         <div class="pn">
           <p><button id="nx1">次の問題に答える ▶</button>　<span class="mu" id="cnt"></span></p>
+          <!-- 出題の好み：タグごとに 指定なし → 優先 → 避ける。このブラウザに覚えておく -->
+          <details id="pref">
+            <summary>出題の好み：<span id="psum">指定なし</span></summary>
+            <p class="mu" style="margin: 6px 0">タグを押すと「優先」→「避ける」→「指定なし」の順に変わります。避けるタグの問題は出しません。優先は、合う問題がなければ普通の問題を出します。同じ分類の中は「どれか」、分類どうしは「どれも」です。</p>
+            <div id="pbox"></div>
+            <p><button class="g" id="pclr">好みを消す</button></p>
+          </details>
           <div class="wrap"><table class="rv" id="ls"></table></div>
         </div>
       </div>
@@ -68,6 +106,7 @@
           <p class="mu" id="tinfo" hidden></p>
           <div id="flow"></div>
           <p id="q"></p>
+          <p id="qtags" class="tl"></p>
           <p><button class="g" id="fav">☆ お気に入りに入れる</button> <span class="mu">あとでマイページから振り返れます</span></p>
           <!-- 答える -->
           <div id="form" hidden>
@@ -86,6 +125,9 @@
           <div id="res" hidden>
             <h3>みんなの回答</h3>
             <p class="sum" id="sum"></p>
+            <!-- 行動の割合（あなたを含む、答えた全員）。色は GTO Wizard に寄せる -->
+            <div id="abar" class="abar" role="img"></div>
+            <div id="alegend" class="alegend"></div>
             <div id="alist"></div>
             <p id="vote">
               この問題は：<button class="g" id="vup">良い問題</button><button class="g" id="vdn">悪い問題</button>
