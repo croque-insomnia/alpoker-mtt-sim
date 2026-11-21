@@ -444,7 +444,18 @@ test("お気に入りとマイページ：お気に入りの一覧、他の人�
   // 1問目は2人とも違う行動 → 答えが違った問題。2問目は同じ → 出ない
   assert.deepEqual(me.minority.map((x) => [x.id, x.diff, x.n]), [[ids[0], 1, 2]]);
   assert.deepEqual(me.agree, { n: 2, rate: 50 });
-  assert.ok(me.tendency.facing.n + me.tendency.open.n == 2);
+  // 傾向：同じ問題で、自分の行動とほかの人の行動の割合を比べる。
+  // 1問目は自分が降りる側（降りる・チェック）でほかの2人はオールイン、2問目は全員が自分と同じ
+  const want = { facing: { n: 0, mine: {}, others: {} }, open: { n: 0, mine: {}, others: {} } };
+  for (const [id, othersPush] of [[ids[0], true], [ids[1], false]]) {
+    const f = isFacing((await call(k, "api/spots/one?id=" + id)).body.spot.situation), w = want[f ? "facing" : "open"], mine = f ? "fold" : "passive";
+    w.n++;
+    w.mine[mine] = (w.mine[mine] || 0) + 1;
+    const o = othersPush ? "aggr" : mine;
+    w.others[o] = (w.others[o] || 0) + 1;
+  }
+  const pct = (w) => ({ n: w.n, mine: Object.fromEntries(Object.entries(w.mine).map(([g, v]) => [g, Math.round((v / w.n) * 100)])), others: Object.fromEntries(Object.entries(w.others).map(([g, v]) => [g, Math.round((v / w.n) * 100)])) });
+  assert.deepEqual(me.tendency, { facing: pct(want.facing), open: pct(want.open) });
   // 外す
   await call(k, "api/spots/fav", { body: { id: ids[2], on: false } });
   assert.deepEqual((await call(k, "api/spots/mine")).body.favs, []);
@@ -476,4 +487,10 @@ test("お気に入りは良い問題1票と同じに数え、「次の問題」�
   assert.equal((await call(m, "api/spots")).body.spots.find((s) => s.id == b).score, 2);
   // Mio の「次の問題」は、古い a より、評価の高い b が先
   assert.equal((await call(m, "api/spots/next")).body.id, b);
+  // 答える前のお気に入りは数えない（「あとで答える」用）。答えたら数える
+  assert.equal((await call(m, "api/spots/fav", { body: { id: a, on: true } })).body.fav, 1);
+  assert.equal((await call(k, "api/spots")).body.spots.find((s) => s.id == a).score, 0, "答える前のお気に入り");
+  await pass(m, a);
+  assert.equal((await call(k, "api/spots")).body.spots.find((s) => s.id == a).score, 1, "答えたあとは数える");
+  assert.equal((await call(k, "api/spots/one?id=" + a)).body.votes.favs, 1);
 });

@@ -290,7 +290,10 @@ const ACTIONS = ["fold", "check", "call", "bet", "raise", "allin"];
 const BAD = -2; // 評価がこれ以下の問題は「次の問題」に出さない
 // 問題の評価（SQL）：良い問題 +1・悪い問題 −1 の合計に、お気に入りに入れた人の数を足す
 // （お気に入りは「あとで振り返りたい良い問題」なので、良い問題1票と同じに数える。良い問題とお気に入りの両方なら +2）
-const SCORE = `(COALESCE((SELECT SUM(v.vote) FROM spot_votes v WHERE v.spot_id = s.id), 0) + (SELECT COUNT(*) FROM spot_favs f2 WHERE f2.spot_id = s.id))`;
+// 良い・悪いと同じく、数えるのはその問題に答えた人のお気に入りだけ（答える前の「あとで答える」用のお気に入りは数えない）
+const FAVS = (spot) =>
+  `(SELECT COUNT(*) FROM spot_favs f2 WHERE f2.spot_id = ${spot} AND EXISTS (SELECT 1 FROM spot_answers a2 WHERE a2.spot_id = f2.spot_id AND a2.uid = f2.uid))`;
+const SCORE = `(COALESCE((SELECT SUM(v.vote) FROM spot_votes v WHERE v.spot_id = s.id), 0) + ${FAVS("s.id")})`;
 function openSpots(db, { now = () => Date.now() } = {}) {
   // 前に作った問題のうち、まだ誰も答えていない、リンプのあったポストフロップは片付ける（答えがついた問題は残す）
   // 片付くのは、この判定を入れる前に作った問題だけ（新しく作る問題にリンプはない）。実際に消えるのは、更新後の最初の起動のとき
@@ -343,11 +346,13 @@ function openSpots(db, { now = () => Date.now() } = {}) {
         (SELECT a.action FROM spot_answers a WHERE a.spot_id = s.id AND a.uid = f.uid) AS mine
       FROM spot_favs f JOIN spots s ON s.id = f.spot_id WHERE f.uid = ? ORDER BY f.created_at DESC`),
     // マイページ用：自分が答えた問題の、全員の答え
-    answersAround: db.prepare(`SELECT a.spot_id, a.uid, a.action, s.kind, s.situation FROM spot_answers a JOIN spots s ON s.id = a.spot_id
+    // 答えは問題 ID と行動だけを読み、問題の中身は問題ごとに1回だけ読む（answeredSpots）
+    answersAround: db.prepare(`SELECT a.spot_id, a.uid, a.action FROM spot_answers a
       WHERE a.spot_id IN (SELECT spot_id FROM spot_answers WHERE uid = ?) ORDER BY a.spot_id`),
+    answeredSpots: db.prepare(`SELECT s.id, s.kind, s.situation FROM spots s WHERE s.id IN (SELECT spot_id FROM spot_answers WHERE uid = ?)`),
     votes: db.prepare(`SELECT COALESCE(SUM(vote > 0), 0) AS up, COALESCE(SUM(vote < 0), 0) AS down,
       (SELECT vote FROM spot_votes WHERE spot_id = @id AND uid = @uid) AS mine,
-      (SELECT COUNT(*) FROM spot_favs WHERE spot_id = @id) AS favs FROM spot_votes WHERE spot_id = @id`),
+      ${FAVS("@id")} AS favs FROM spot_votes WHERE spot_id = @id`),
     answers: db.prepare("SELECT uid, action, size_bb, comment, answered_at FROM spot_answers WHERE spot_id = ? ORDER BY answered_at ASC"),
     mine: db.prepare("SELECT 1 FROM spot_answers WHERE spot_id = ? AND uid = ?"),
     count: db.prepare("SELECT COUNT(*) AS n FROM spot_answers WHERE spot_id = ?"),
@@ -396,7 +401,7 @@ function openSpots(db, { now = () => Date.now() } = {}) {
     // マイページ：お気に入り・他の人と答えが違った問題・答えの傾向
     mine(uid) {
       const favs = st.favs.all(uid).map((r) => ({ id: r.id, kind: r.kind, situation: JSON.parse(r.situation), mine: r.mine || null, at: r.created_at }));
-      return { favs, ...compare(uid, st.answersAround.all(uid)) };
+      return { favs, ...compare(uid, st.answersAround.all(uid), st.answeredSpots.all(uid)) };
     },
     totals: (uid) => st.totals.get(uid),
     // 次の問題：前に答えた問題ともう一方の種類を優先する。なければどちらの種類でも（既にある問題を先に）、それもなければ作る
@@ -433,16 +438,16 @@ const isFacing = (s) => (s.facing != null ? !!s.facing : s.to_call_bb > 0);
 // 行動の大きなまとめ：降りる / 受け身（チェック・コール）/ 攻める（ベット・レイズ・オールイン）
 const GROUP = { fold: "fold", check: "passive", call: "passive", bet: "aggr", raise: "aggr", allin: "aggr" };
 const MINORITY = 2 / 3; // 他の人の 2/3 以上が、自分と違う行動を選んだ問題を「答えが違った問題」にする
-// rows: 自分が答えた問題の、全員の答え（{ spot_id, uid, action, kind, situation }）
+// rows: 自分が答えた問題の、全員の答え（{ spot_id, uid, action }）、spots: その問題（{ id, kind, situation }）
 // 戻り値：
 //   minority: 他の人と答えが違った問題（他の人が2人以上答えていて、その 2/3 以上が自分と違う行動）。違った割合が大きい順
 //   agree: 多数派（他の人で一番多い行動）と同じだった割合
 //   tendency: ベットを受けたとき / 受けていないときの、自分と他の人の行動の割合（同じ問題どうしで比べる）
-function compare(uid, rows) {
-  const by = new Map();
+function compare(uid, rows, spots) {
+  const by = new Map(spots.map((s) => [s.id, { id: s.id, kind: s.kind, situation: JSON.parse(s.situation), mine: null, others: [] }]));
   for (const r of rows) {
-    if (!by.has(r.spot_id)) by.set(r.spot_id, { id: r.spot_id, kind: r.kind, situation: JSON.parse(r.situation), mine: null, others: [] });
     const x = by.get(r.spot_id);
+    if (!x) continue;
     if (r.uid === uid) x.mine = r.action;
     else x.others.push(r.action);
   }
