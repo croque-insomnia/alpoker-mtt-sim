@@ -171,11 +171,11 @@ function drawForm(s) {
   if (s.min_raise_bb < s.max_bb) opts.push([facing ? "raise" : "bet", facing ? "レイズ" : "ベット"]);
   // コールに持ち点の全部が要るときは、オールインのボタンをコールとして見せる
   opts.push(["allin", facing && s.to_call_bb >= s.max_bb - s.in_bb ? `コール（オールイン） ${fb(s.max_bb)}BB` : `オールイン ${fb(s.max_bb)}BB`]);
+  // ボタンはどれも同じ見た目にする（ゲーム画面のレイズの黄色い枠を付けると、最初から選ばれているように見える）。選んだものだけ黄色く塗る
   for (const [k, label] of opts) {
-    const x = el("button", k == "raise" ? "rb" : "g", label);
+    const x = el("button", "g", label);
     x.dataset.k = k;
     x.onclick = () => pickAct(k);
-    if (k == "bet") x.className = "rb";
     b.appendChild(x);
   }
   // レイズ額：よく使う額

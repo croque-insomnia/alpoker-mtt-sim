@@ -17,7 +17,8 @@
       #flow b { color: var(--ac); }
       #q { font-weight: 700; font-size: 16px; margin: 10px 0 4px; }
       #form textarea { width: 100%; min-height: 80px; box-sizing: border-box; font: inherit; padding: 8px; border-radius: 8px; border: 1px solid var(--bd); background: var(--bg); color: var(--tx); }
-      #form .acts button.on { outline: 3px solid var(--ac); outline-offset: 1px; }
+      /* 選んだ行動だけ黄色く塗る（ほかのボタンは同じ見た目） */
+      #form .acts button.on { background: var(--ac); border-color: var(--ac); color: #000; font-weight: 700; }
       #rzb { margin: 8px 0; }
       #rzb input[type="number"] { width: 90px; display: inline-block; }
       .ans { border: 1px solid var(--bd); border-radius: 10px; padding: 8px 10px; margin: 8px 0; }
