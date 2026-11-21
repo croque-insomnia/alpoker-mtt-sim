@@ -564,3 +564,19 @@ test("次の問題：避けるタグの問題は出さず、優先のタグに�
   assert.ok(any && any != vs3);
   assert.ok(!tagsOf(sp.get(any).situation).includes("vs3bet"));
 });
+
+test("一覧の細い棒：行動ごとの人数は、自分が答えた問題にだけつく（答える前の問題には出さない）", () => {
+  const db = openDb(":memory:");
+  const sp = openSpots(db);
+  const add = (s, h) => Number(db.prepare("INSERT INTO spots (kind, source, situation, hash, created_at) VALUES (?, 'auto', ?, ?, 0)").run(s.kind, JSON.stringify(s), h).lastInsertRowid);
+  const a = add(makePreflop(rng(1), { scenario: "vsopen", pos: "BB", stack: 16, hand: "KJo" }), "a");
+  const b = add(makePreflop(rng(2), { scenario: "open", pos: "CO", stack: 16, hand: "A5s" }), "b");
+  const ans = (id, uid, action) => sp.answer(id, uid, { action, size_bb: null, comment: "x" });
+  ans(a, "me", "call");
+  ans(a, "u2", "fold");
+  ans(a, "u3", "call");
+  ans(b, "u2", "fold");
+  const L = sp.list("me");
+  assert.deepEqual(L.find((r) => r.id == a).dist, { call: 2, fold: 1 });
+  assert.equal(L.find((r) => r.id == b).dist, undefined, "答えていない問題には出さない");
+});

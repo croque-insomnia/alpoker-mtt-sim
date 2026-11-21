@@ -132,6 +132,8 @@ async function showList() {
     const tl = el("span", "tl");
     for (const id of s.tags || []) if (!["pre", "post", "flop", "turn", "river", "open", "vsopen", "vs3bet"].includes(id) && tagLabel[id]) tl.appendChild(el("span", "tag", tagLabel[id]));
     td.appendChild(tl);
+    // 回答済みの問題：タグの下に、行動の割合の細い棒（結果の棒と同じ色・並び）
+    if (s.mine && s.dist) td.appendChild(miniBar(s.dist));
     tr.appendChild(td);
     tr.appendChild(el("td", "c2", s.answers + "人"));
     tr.appendChild(el("td", "c2", s.score > 0 ? "+" + s.score : s.score < 0 ? "−" + -s.score : ""));
@@ -317,6 +319,22 @@ function drawBar(answers) {
     lg.appendChild(li);
   }
   bar.setAttribute("aria-label", "行動の割合：" + parts.map((x) => `${ACT[x.k]} ${x.n}人（${x.pct}%）`).join("、"));
+}
+// 一覧の細い棒。dist：{ 行動: 人数 }。人数と割合は、触れたとき（title）と読み上げ（aria-label）で出す
+function miniBar(dist) {
+  const total = Object.values(dist).reduce((a, b) => a + b, 0);
+  const bar = el("span", "mbar");
+  const parts = AORDER.filter((k) => dist[k]).map((k) => `${ACT[k]} ${dist[k]}人（${Math.round((100 * dist[k]) / total)}%）`);
+  for (const k of AORDER.filter((k) => dist[k])) {
+    const seg = el("span");
+    seg.style.flex = String(dist[k]);
+    seg.style.background = ACOL[k];
+    bar.appendChild(seg);
+  }
+  bar.title = `${total}人：` + parts.join("・");
+  bar.setAttribute("role", "img");
+  bar.setAttribute("aria-label", "行動の割合：" + parts.join("、"));
+  return bar;
 }
 function drawResult(s, answers) {
   // 何人がどれを選んだか：割合の棒と凡例。その下に、全員の選択と理由を並べる

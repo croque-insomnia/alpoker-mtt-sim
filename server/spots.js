@@ -428,6 +428,9 @@ function openSpots(db, { now = () => Date.now() } = {}) {
         ${SCORE} AS score,
         EXISTS (SELECT 1 FROM spot_favs f WHERE f.spot_id = s.id AND f.uid = @uid) AS fav
       FROM spots s ORDER BY (mine IS NULL) DESC, s.id DESC LIMIT @limit`),
+    // 一覧の細い棒：自分が答えた問題だけ、行動ごとの人数（答える前の問題は、他の人の答えが透けるので出さない）
+    dist: db.prepare(`SELECT spot_id, action, COUNT(*) AS n FROM spot_answers
+      WHERE spot_id IN (SELECT spot_id FROM spot_answers WHERE uid = ?) GROUP BY spot_id, action`),
     // 一覧の上限で切る前の数（画面の「回答済み x / y 問」用）
     totals: db.prepare(`SELECT (SELECT COUNT(*) FROM spots) AS total, (SELECT COUNT(*) FROM spot_answers WHERE uid = ?) AS done`),
     // 作り置き：まだ誰も答えていないポストフロップの問題の数
@@ -507,11 +510,16 @@ function openSpots(db, { now = () => Date.now() } = {}) {
   return {
     create,
     topUp,
-    list: (uid, limit = 200) =>
-      st.list.all({ uid, limit }).map((r) => {
+    list: (uid, limit = 200) => {
+      const dist = {};
+      for (const d of st.dist.all(uid)) (dist[d.spot_id] ||= {})[d.action] = d.n;
+      return st.list.all({ uid, limit }).map((r) => {
         const situation = JSON.parse(r.situation);
-        return { ...r, situation, tags: tagsOf(situation), mine: r.mine || null };
-      }),
+        const row = { ...r, situation, tags: tagsOf(situation), mine: r.mine || null };
+        if (row.mine) row.dist = dist[r.id] || {};
+        return row;
+      });
+    },
     // お気に入りにする（on）・外す
     setFav(id, uid, on) {
       if (on) st.fav.run(id, uid, now());
