@@ -34,10 +34,70 @@ async function post(p, body) {
   return j;
 }
 const go = (id) => (location.href = "spots.html?id=" + id);
+// ---- 出題の好み（タグごとに 1: 優先 / -1: 避ける）。このブラウザに覚えておく ----
+const PREF_KEY = "alp-spot-pref:v1";
+const loadPref = () => {
+  try {
+    const x = JSON.parse(localStorage.getItem(PREF_KEY) || "{}");
+    return x && typeof x == "object" ? x : {};
+  } catch (e) {
+    return {};
+  }
+};
+const savePref = (x) => {
+  try {
+    localStorage.setItem(PREF_KEY, JSON.stringify(x));
+  } catch (e) {}
+};
+let PREF = loadPref();
+const prefQuery = () => {
+  const ids = (v) => Object.keys(PREF).filter((k) => PREF[k] == v).join(",");
+  const q = new URLSearchParams();
+  if (ids(1)) q.set("prefer", ids(1));
+  if (ids(-1)) q.set("avoid", ids(-1));
+  const t = q.toString();
+  return t ? "?" + t : "";
+};
+// 好みの欄（tags：タグの一覧 { id, cat, label }、cats：分類の名前）
+function drawPref(tags, cats) {
+  const box = $("pbox");
+  box.textContent = "";
+  const label = Object.fromEntries(tags.map((t) => [t.id, t.label]));
+  for (const [cat, name] of Object.entries(cats)) {
+    const row = el("div", "cat");
+    row.appendChild(el("span", null, name));
+    for (const t of tags.filter((x) => x.cat == cat)) {
+      const b = el("button", "tg", t.label);
+      const paint = () => (b.className = "tg" + (PREF[t.id] == 1 ? " p" : PREF[t.id] == -1 ? " a" : ""));
+      paint();
+      b.onclick = () => {
+        // 指定なし → 優先 → 避ける → 指定なし
+        const v = PREF[t.id] == 1 ? -1 : PREF[t.id] == -1 ? 0 : 1;
+        if (v) PREF[t.id] = v;
+        else delete PREF[t.id];
+        savePref(PREF);
+        paint();
+        sumPref(label);
+      };
+      row.appendChild(b);
+    }
+    box.appendChild(row);
+  }
+  $("pclr").onclick = () => {
+    PREF = {};
+    savePref(PREF);
+    drawPref(tags, cats);
+  };
+  sumPref(label);
+}
+function sumPref(label) {
+  const p = Object.keys(PREF).filter((k) => PREF[k] == 1 && label[k]), a = Object.keys(PREF).filter((k) => PREF[k] == -1 && label[k]);
+  $("psum").textContent = !p.length && !a.length ? "指定なし" : [p.length ? "優先：" + p.map((k) => label[k]).join("・") : "", a.length ? "避ける：" + a.map((k) => label[k]).join("・") : ""].filter(Boolean).join("　");
+}
 async function nextSpot() {
   try {
     note("", "");
-    const { id } = await get("api/spots/next");
+    const { id } = await get("api/spots/next" + prefQuery());
     go(id);
   } catch (e) {
     note("err", e.message);
@@ -48,6 +108,8 @@ $("nx1").onclick = $("nx2").onclick = nextSpot;
 // ---- 一覧 ----
 async function showList() {
   const r = await get("api/spots"), spots = r.spots;
+  if (r.tags) drawPref(r.tags, r.cats);
+  const tagLabel = Object.fromEntries((r.tags || []).map((t) => [t.id, t.label]));
   // 数は一覧の上限で切る前のもの（古い問題まで含めた全体）
   const total = r.total != null ? r.total : spots.length, done = r.done != null ? r.done : spots.filter((s) => s.mine).length;
   $("cnt").textContent = spots.length ? `回答済み ${done} / ${total} 問` + (total > spots.length ? `（一覧は未回答から ${spots.length} 問）` : "") : "まだ問題がありません。「次の問題に答える」で最初の問題が作られます";
@@ -66,6 +128,10 @@ async function showList() {
     tr.appendChild(el("td", null, s.id));
     const td = el("td");
     td.append(el("span", "tag", s.kind == "preflop" ? "プリフロップ" : "ポストフロップ"), " ", (s.fav ? "★ " : "") + title(s.situation));
+    // タグ（種類とストリート・シナリオは見出しにあるので省く）
+    const tl = el("span", "tl");
+    for (const id of s.tags || []) if (!["pre", "post", "flop", "turn", "river", "open", "vsopen", "vs3bet"].includes(id) && tagLabel[id]) tl.appendChild(el("span", "tag", tagLabel[id]));
+    td.appendChild(tl);
     tr.appendChild(td);
     tr.appendChild(el("td", "c2", s.answers + "人"));
     tr.appendChild(el("td", "c2", s.score > 0 ? "+" + s.score : s.score < 0 ? "−" + -s.score : ""));
@@ -336,6 +402,9 @@ async function showSpot(id) {
       (S.players_left <= 2 ? "・ヘッズアップ" : S.players_left <= 5 ? "・最終卓" : S.players_left <= S.itm ? "・入賞圏内" : S.players_left <= S.itm + 3 ? "・バブル付近" : "") +
       `）・${S.table_size || S.seats.length}人卓・平均の持ち点 ${S.avg_bb}BB・あなた ${S.hero.stack_bb}BB`;
   $("q").textContent = r.answered ? `#${S.id}　${title(S)}` : `#${S.id}　${title(S)}。どうする？（${r.count}人が回答済み）`;
+  const qt = $("qtags");
+  qt.textContent = "";
+  for (const t of r.tags || []) qt.appendChild(el("span", "tag", t.label));
   $("form").hidden = $("res").hidden = true;
   drawFav(r.fav);
   if (r.answered) drawResult(S, r.answers), drawVotes(r.votes);
